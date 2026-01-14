@@ -89,7 +89,7 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.5"
-  flexbox:
+  flexbox_layout:
     dependency: "direct main"
     description:
       path: ".."

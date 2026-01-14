@@ -1,4 +1,4 @@
-import 'package:flexbox/flexbox.dart';
+import 'package:flexbox_layout/flexbox_layout.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/neo_brutalism.dart';

@@ -35,7 +35,7 @@ jobs:
         working-directory: example
 
       - name: Build web
-        run: flutter build web --release --base-href /flexbox/
+        run: flutter build web --release --base-href /flexbox_layout/
         working-directory: example
 
       - name: Setup Pages

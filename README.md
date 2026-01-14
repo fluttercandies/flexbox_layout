@@ -8,16 +8,16 @@
 
 A Flutter library for CSS Flexbox layout. This package provides widgets for creating layouts using the CSS Flexbox layout model, bringing the power and flexibility of flexbox to Flutter.
 
-[![Pub Version](https://img.shields.io/pub/v/flexbox)](https://pub.dev/packages/flexbox)
-[![Publisher](https://img.shields.io/pub/publisher/flexbox)](https://pub.dev/packages/flexbox)
-[![Likes](https://img.shields.io/pub/likes/flexbox)](https://pub.dev/packages/flexbox/score)
-[![Popularity](https://img.shields.io/pub/popularity/flexbox)](https://pub.dev/packages/flexbox/score)
-[![Pub Dev](https://img.shields.io/badge/dart-docs-blue.svg)](https://pub.dev/documentation/flexbox/latest/)
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-GitHub%20Pages-blue)](https://fluttercandies.github.io/flexbox/)
+[![Pub Version](https://img.shields.io/pub/v/flexbox_layout)](https://pub.dev/packages/flexbox_layout)
+[![Publisher](https://img.shields.io/pub/publisher/flexbox_layout)](https://pub.dev/packages/flexbox_layout)
+[![Likes](https://img.shields.io/pub/likes/flexbox_layout)](https://pub.dev/packages/flexbox_layout/score)
+[![Popularity](https://img.shields.io/pub/popularity/flexbox_layout)](https://pub.dev/packages/flexbox_layout/score)
+[![Pub Dev](https://img.shields.io/badge/dart-docs-blue.svg)](https://pub.dev/documentation/flexbox_layout/latest/)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-GitHub%20Pages-blue)](https://fluttercandies.github.io/flexbox_layout/)
 
 ## Live Demo
 
-Try out the interactive demo: **[https://fluttercandies.github.io/flexbox/](https://fluttercandies.github.io/flexbox/)**
+Try out the interactive demo: **[https://fluttercandies.github.io/flexbox_layout/](https://fluttercandies.github.io/flexbox_layout/)**
 
 ## Screenshots
 
@@ -41,7 +41,7 @@ Add this to your package's `pubspec.yaml` file:
 
 ```yaml
 dependencies:
-  flexbox: any
+  flexbox_layout: any
 ```
 
 ## Usage
@@ -49,7 +49,7 @@ dependencies:
 ### Basic Flexbox
 
 ```dart
-import 'package:flexbox/flexbox.dart';
+import 'package:flexbox_layout/flexbox_layout.dart';
 
 Flexbox(
   flexDirection: FlexDirection.row,

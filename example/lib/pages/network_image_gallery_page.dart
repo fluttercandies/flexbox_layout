@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:easy_refresh/easy_refresh.dart';
-import 'package:flexbox/flexbox.dart';
+import 'package:flexbox_layout/flexbox_layout.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 

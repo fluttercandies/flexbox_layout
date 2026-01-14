@@ -8,16 +8,16 @@
 
 一个用于 CSS Flexbox 布局的 Flutter 库。此包提供了使用 CSS Flexbox 布局模型创建布局的组件，将 flexbox 的强大功能和灵活性带到了 Flutter。
 
-[![Pub Version](https://img.shields.io/pub/v/flexbox)](https://pub.dev/packages/flexbox)
-[![Publisher](https://img.shields.io/pub/publisher/flexbox)](https://pub.dev/packages/flexbox)
-[![Likes](https://img.shields.io/pub/likes/flexbox)](https://pub.dev/packages/flexbox/score)
-[![Popularity](https://img.shields.io/pub/popularity/flexbox)](https://pub.dev/packages/flexbox/score)
-[![Pub Dev](https://img.shields.io/badge/dart-docs-blue.svg)](https://pub.dev/documentation/flexbox/latest/)
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-GitHub%20Pages-blue)](https://fluttercandies.github.io/flexbox/)
+[![Pub Version](https://img.shields.io/pub/v/flexbox_layout)](https://pub.dev/packages/flexbox_layout)
+[![Publisher](https://img.shields.io/pub/publisher/flexbox_layout)](https://pub.dev/packages/flexbox_layout)
+[![Likes](https://img.shields.io/pub/likes/flexbox_layout)](https://pub.dev/packages/flexbox_layout/score)
+[![Popularity](https://img.shields.io/pub/popularity/flexbox_layout)](https://pub.dev/packages/flexbox_layout/score)
+[![Pub Dev](https://img.shields.io/badge/dart-docs-blue.svg)](https://pub.dev/documentation/flexbox_layout/latest/)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-GitHub%20Pages-blue)](https://fluttercandies.github.io/flexbox_layout/)
 
 ## 在线演示
 
-试一试交互式演示：**[https://fluttercandies.github.io/flexbox/](https://fluttercandies.github.io/flexbox/)**
+试一试交互式演示：**[https://fluttercandies.github.io/flexbox_layout/](https://fluttercandies.github.io/flexbox_layout/)**
 
 ## 截图
 
@@ -41,7 +41,7 @@
 
 ```yaml
 dependencies:
-  flexbox: any
+  flexbox_layout: any
 ```
 
 ## 使用方法
@@ -49,7 +49,7 @@ dependencies:
 ### 基础 Flexbox
 
 ```dart
-import 'package:flexbox/flexbox.dart';
+import 'package:flexbox_layout/flexbox_layout.dart';
 
 Flexbox(
   flexDirection: FlexDirection.row,
