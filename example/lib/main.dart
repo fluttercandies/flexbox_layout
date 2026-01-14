@@ -5,10 +5,10 @@ import 'package:flutter/material.dart';
 import 'pages/basic_flexbox_page.dart';
 import 'pages/cat_gallery_page.dart';
 import 'pages/delegates_showcase_page.dart';
-import 'pages/dynamic_flexbox_list_page.dart';
 import 'pages/dynamic_flexbox_page.dart';
 import 'pages/network_image_gallery_page.dart';
 import 'pages/playground_page.dart';
+import 'pages/scalable_flexbox_page.dart';
 import 'pages/sliver_flexbox_page.dart';
 import 'theme/neo_brutalism.dart';
 
@@ -61,6 +61,13 @@ class _HomePageState extends State<HomePage> {
       page: SliverFlexboxPage(),
     ),
     _ExampleItem(
+      title: 'Scalable Flexbox',
+      subtitle: 'Pinch-to-zoom grid like Google Photos',
+      icon: Icons.pinch_rounded,
+      color: NeoBrutalism.cyan,
+      page: ScalableFlexboxPage(),
+    ),
+    _ExampleItem(
       title: 'Network Gallery',
       subtitle: 'API-resolved image dimensions',
       icon: Icons.cloud_download_rounded,
@@ -75,17 +82,10 @@ class _HomePageState extends State<HomePage> {
       page: DynamicFlexboxPage(),
     ),
     _ExampleItem(
-      title: 'Flexbox List',
-      subtitle: 'Non-sliver convenience widget',
-      icon: Icons.view_list_rounded,
-      color: NeoBrutalism.orange,
-      page: DynamicFlexboxListPage(),
-    ),
-    _ExampleItem(
       title: 'Delegates',
       subtitle: 'All delegate types showcase',
       icon: Icons.dashboard_rounded,
-      color: NeoBrutalism.cyan,
+      color: NeoBrutalism.grey,
       page: DelegatesShowcasePage(),
     ),
     _ExampleItem(

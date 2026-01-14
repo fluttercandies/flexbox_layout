@@ -1,11 +1,12 @@
-import 'dart:convert';
-
 import 'package:easy_refresh/easy_refresh.dart';
+import 'package:example/config/image_config.dart';
+import 'package:example/models/image_post.dart';
+import 'package:example/sources/image_source_factory.dart';
 import 'package:flexbox_layout/flexbox_layout.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 
 import '../shared/cache_image.dart';
+import '../shared/safe_state_mixin.dart';
 import '../theme/neo_brutalism.dart';
 import '../widgets/neo_easy_refresh.dart';
 import '../widgets/neo_widgets.dart';
@@ -31,8 +32,8 @@ class NetworkImageGalleryPage extends StatefulWidget {
 }
 
 class _NetworkImageGalleryPageState extends State<NetworkImageGalleryPage>
-    with DimensionResolverMixin {
-  final List<_PostItem> _posts = [];
+    with DimensionResolverMixin, SafeStateMixin {
+  final List<ImagePost> _posts = [];
   bool _isLoading = false;
   bool _hasMore = true;
   int _currentPage = 1;
@@ -66,64 +67,53 @@ class _NetworkImageGalleryPageState extends State<NetworkImageGalleryPage>
     if (_isLoading) return;
     if (!isRefresh && !_hasMore) return;
 
-    setState(() {
+    setSafeState(() {
       _isLoading = true;
       _error = null;
     });
 
     try {
       final page = isRefresh ? 1 : _currentPage;
-      final url = Uri.parse(
-        'https://yande.re/post.json?tags=rating:safe&limit=$_postsPerPage&page=$page',
+      final source = ImageSourceFactory.create(ImageConfig.currentSource);
+      final newPosts = await source.fetchPosts(
+        page: page,
+        limit: _postsPerPage,
       );
-      final response = await http.get(url);
 
-      if (response.statusCode == 200) {
-        final List<dynamic> data = jsonDecode(response.body);
-
-        if (data.isEmpty) {
-          setState(() {
-            _hasMore = false;
-            _isLoading = false;
-          });
-          return;
-        }
-
-        final startIndex = isRefresh ? 0 : _posts.length;
-        final newPosts = data.map((json) => _PostItem.fromJson(json)).toList();
-
-        setState(() {
-          if (isRefresh) {
-            _posts.clear();
-            _currentPage = 1;
-            _hasMore = true;
-          }
-          _posts.addAll(newPosts);
-          _currentPage++;
+      if (newPosts.isEmpty) {
+        setSafeState(() {
+          _hasMore = false;
           _isLoading = false;
         });
-
-        // Start resolving dimensions for newly loaded posts
-        _resolveNewPostDimensions(startIndex, newPosts);
-      } else {
-        setState(() {
-          _error = 'Failed to load: ${response.statusCode}';
-          _isLoading = false;
-        });
+        return;
       }
+
+      final startIndex = isRefresh ? 0 : _posts.length;
+
+      setSafeState(() {
+        if (isRefresh) {
+          _posts.clear();
+          _currentPage = 1;
+          _hasMore = true;
+        }
+        _posts.addAll(newPosts);
+        _currentPage++;
+        _isLoading = false;
+      });
+
+      _resolveNewPostDimensions(startIndex, newPosts);
     } catch (e) {
-      setState(() {
-        _error = 'Network error: $e';
+      setSafeState(() {
+        _error = 'Load error: $e';
         _isLoading = false;
       });
     }
   }
 
-  void _resolveNewPostDimensions(int startIndex, List<_PostItem> posts) {
+  void _resolveNewPostDimensions(int startIndex, List<ImagePost> posts) {
     for (int i = 0; i < posts.length; i++) {
       final post = posts[i];
-      // Use preview URL for faster dimension resolution
-      resolveImageDimension(CacheImage(post.previewUrl), key: startIndex + i);
+      resolveImageDimension(CacheImage(post.imageUrl), key: startIndex + i);
     }
   }
 
@@ -441,7 +431,7 @@ class _NetworkImageGalleryPageState extends State<NetworkImageGalleryPage>
                         valueLabel: '${_targetRowHeight.round()}px',
                         onChanged: (v) {
                           setSheetState(() {});
-                          setState(() => _targetRowHeight = v);
+                          setSafeState(() => _targetRowHeight = v);
                         },
                       ),
                     ],
@@ -457,34 +447,6 @@ class _NetworkImageGalleryPageState extends State<NetworkImageGalleryPage>
   }
 }
 
-class _PostItem {
-  const _PostItem({
-    required this.id,
-    required this.previewUrl,
-    required this.sampleUrl,
-    required this.tags,
-    required this.score,
-  });
-
-  factory _PostItem.fromJson(Map<String, dynamic> json) {
-    return _PostItem(
-      id: json['id'] as int,
-      previewUrl: json['preview_url'] as String,
-      sampleUrl: json['sample_url'] as String,
-      tags: json['tags'] as String,
-      score: json['score'] as int,
-    );
-  }
-
-  final int id;
-  final String previewUrl;
-  final String sampleUrl;
-  final String tags;
-  final int score;
-  // Note: We intentionally do NOT store width/height from API
-  // because this page demonstrates RUNTIME dimension resolution
-}
-
 class _NetworkImageItem extends StatelessWidget {
   const _NetworkImageItem({
     required this.post,
@@ -492,99 +454,43 @@ class _NetworkImageItem extends StatelessWidget {
     required this.isAspectRatioKnown,
   });
 
-  final _PostItem post;
+  final ImagePost post;
   final int index;
   final bool isAspectRatioKnown;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: NeoBrutalism.shapeDecoration(
-        color: NeoBrutalism.white,
-        radius: 8,
-        hasShadow: false,
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(5),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            Image(
-              image: CacheImage(post.sampleUrl),
-              fit: BoxFit.cover,
-              loadingBuilder: (context, child, loadingProgress) {
-                if (loadingProgress == null) return child;
-                return Container(
-                  color: NeoBrutalism.grey,
-                  child: Center(
-                    child: SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(
-                        value: loadingProgress.expectedTotalBytes != null
-                            ? loadingProgress.cumulativeBytesLoaded /
-                                  loadingProgress.expectedTotalBytes!
-                            : null,
-                        strokeWidth: 2,
-                        color: NeoBrutalism.black,
-                      ),
-                    ),
-                  ),
-                );
-              },
-              errorBuilder: (context, error, stackTrace) {
-                return Container(
-                  color: NeoBrutalism.grey,
-                  child: const Icon(Icons.broken_image_rounded, size: 32),
-                );
-              },
-            ),
-            Positioned(
-              top: 6,
-              left: 6,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: NeoBrutalism.shapeDecoration(
-                  color: NeoBrutalism.yellow,
-                  radius: 6,
-                  hasShadow: false,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.star_rounded,
-                      size: 12,
-                      color: NeoBrutalism.black,
-                    ),
-                    const SizedBox(width: 2),
-                    Text(
-                      '${post.score}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
+    return DecoratedBox(
+      decoration: BoxDecoration(color: NeoBrutalism.white),
+      child: Image(
+        image: CacheImage(post.imageUrl),
+        fit: BoxFit.cover,
+        loadingBuilder: (context, child, loadingProgress) {
+          if (loadingProgress == null) return child;
+          return Container(
+            color: NeoBrutalism.grey,
+            child: Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  value: loadingProgress.expectedTotalBytes != null
+                      ? loadingProgress.cumulativeBytesLoaded /
+                            loadingProgress.expectedTotalBytes!
+                      : null,
+                  strokeWidth: 2,
+                  color: NeoBrutalism.black,
                 ),
               ),
             ),
-            if (!isAspectRatioKnown)
-              Positioned(
-                top: 6,
-                right: 6,
-                child: Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: NeoBrutalism.shapeDecoration(
-                    color: NeoBrutalism.orange,
-                    radius: 6,
-                    hasShadow: false,
-                  ),
-                  child: const Icon(Icons.hourglass_empty_rounded, size: 12),
-                ),
-              ),
-          ],
-        ),
+          );
+        },
+        errorBuilder: (context, error, stackTrace) {
+          return Container(
+            color: NeoBrutalism.grey,
+            child: const Icon(Icons.broken_image_rounded, size: 32),
+          );
+        },
       ),
     );
   }

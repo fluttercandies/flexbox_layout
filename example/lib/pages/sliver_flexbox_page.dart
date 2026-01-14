@@ -1,10 +1,12 @@
-import 'dart:convert';
-
 import 'package:easy_refresh/easy_refresh.dart';
+import 'package:example/config/image_config.dart';
+import 'package:example/models/image_post.dart';
+import 'package:example/sources/image_source_factory.dart';
 import 'package:flexbox_layout/flexbox_layout.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 
+import '../shared/cache_image.dart';
+import '../shared/safe_state_mixin.dart';
 import '../theme/neo_brutalism.dart';
 import '../widgets/neo_easy_refresh.dart';
 import '../widgets/neo_widgets.dart';
@@ -27,8 +29,9 @@ class SliverFlexboxPage extends StatefulWidget {
   State<SliverFlexboxPage> createState() => _SliverFlexboxPageState();
 }
 
-class _SliverFlexboxPageState extends State<SliverFlexboxPage> {
-  final List<_PostItem> _posts = [];
+class _SliverFlexboxPageState extends State<SliverFlexboxPage>
+    with SafeStateMixin {
+  final List<ImagePost> _posts = [];
   bool _isLoading = false;
   bool _hasMore = true;
   int _currentPage = 1;
@@ -61,50 +64,40 @@ class _SliverFlexboxPageState extends State<SliverFlexboxPage> {
     if (_isLoading) return;
     if (!isRefresh && !_hasMore) return;
 
-    setState(() {
+    setSafeState(() {
       _isLoading = true;
       _error = null;
     });
 
     try {
       final page = isRefresh ? 1 : _currentPage;
-      final url = Uri.parse(
-        'https://yande.re/post.json?tags=rating:safe&limit=$_postsPerPage&page=$page',
+      final source = ImageSourceFactory.create(ImageConfig.currentSource);
+      final newPosts = await source.fetchPosts(
+        page: page,
+        limit: _postsPerPage,
       );
-      final response = await http.get(url);
 
-      if (response.statusCode == 200) {
-        final List<dynamic> data = jsonDecode(response.body);
-
-        if (data.isEmpty) {
-          setState(() {
-            _hasMore = false;
-            _isLoading = false;
-          });
-          return;
-        }
-
-        final newPosts = data.map((json) => _PostItem.fromJson(json)).toList();
-
-        setState(() {
-          if (isRefresh) {
-            _posts.clear();
-            _currentPage = 1;
-            _hasMore = true;
-          }
-          _posts.addAll(newPosts);
-          _currentPage++;
+      if (newPosts.isEmpty) {
+        setSafeState(() {
+          _hasMore = false;
           _isLoading = false;
         });
-      } else {
-        setState(() {
-          _error = 'Failed to load: ${response.statusCode}';
-          _isLoading = false;
-        });
+        return;
       }
+
+      setSafeState(() {
+        if (isRefresh) {
+          _posts.clear();
+          _currentPage = 1;
+          _hasMore = true;
+        }
+        _posts.addAll(newPosts);
+        _currentPage++;
+        _isLoading = false;
+      });
     } catch (e) {
-      setState(() {
-        _error = 'Network error: $e';
+      setSafeState(() {
+        _error = 'Load error: $e';
         _isLoading = false;
       });
     }
@@ -321,9 +314,7 @@ class _SliverFlexboxPageState extends State<SliverFlexboxPage> {
                 mainAxisSpacing: _mainAxisSpacing,
                 crossAxisSpacing: _crossAxisSpacing,
                 // Get aspect ratio from API response for each index
-                aspectRatios: _posts
-                    .map((p) => p.sampleWidth / p.sampleHeight)
-                    .toList(),
+                aspectRatios: _posts.map((p) => p.aspectRatio).toList(),
               ),
               delegate: SliverChildBuilderDelegate((context, index) {
                 if (index >= _posts.length) return null;
@@ -393,7 +384,7 @@ class _SliverFlexboxPageState extends State<SliverFlexboxPage> {
                         valueLabel: '${_targetRowHeight.round()}px',
                         onChanged: (v) {
                           setSheetState(() {});
-                          setState(() => _targetRowHeight = v);
+                          setSafeState(() => _targetRowHeight = v);
                         },
                       ),
                       const SizedBox(height: 16),
@@ -405,7 +396,7 @@ class _SliverFlexboxPageState extends State<SliverFlexboxPage> {
                         valueLabel: '${_mainAxisSpacing.round()}px',
                         onChanged: (v) {
                           setSheetState(() {});
-                          setState(() => _mainAxisSpacing = v);
+                          setSafeState(() => _mainAxisSpacing = v);
                         },
                       ),
                       const SizedBox(height: 16),
@@ -417,7 +408,7 @@ class _SliverFlexboxPageState extends State<SliverFlexboxPage> {
                         valueLabel: '${_crossAxisSpacing.round()}px',
                         onChanged: (v) {
                           setSheetState(() {});
-                          setState(() => _crossAxisSpacing = v);
+                          setSafeState(() => _crossAxisSpacing = v);
                         },
                       ),
                     ],
@@ -433,42 +424,11 @@ class _SliverFlexboxPageState extends State<SliverFlexboxPage> {
   }
 }
 
-class _PostItem {
-  const _PostItem({
-    required this.id,
-    required this.previewUrl,
-    required this.sampleUrl,
-    required this.sampleWidth,
-    required this.sampleHeight,
-    required this.score,
-  });
-
-  factory _PostItem.fromJson(Map<String, dynamic> json) {
-    return _PostItem(
-      id: json['id'] as int,
-      previewUrl: json['preview_url'] as String,
-      sampleUrl: json['sample_url'] as String,
-      sampleWidth: (json['sample_width'] as num).toDouble(),
-      sampleHeight: (json['sample_height'] as num).toDouble(),
-      score: json['score'] as int,
-    );
-  }
-
-  final int id;
-  final String previewUrl;
-  final String sampleUrl;
-  final double sampleWidth;
-  final double sampleHeight;
-  final int score;
-
-  double get aspectRatio => sampleWidth / sampleHeight;
-}
-
 /// A simple image item for the pre-calculated aspect ratio layout.
 class _ImageItem extends StatelessWidget {
   const _ImageItem({super.key, required this.post, required this.index});
 
-  final _PostItem post;
+  final ImagePost post;
   final int index;
 
   @override
@@ -478,8 +438,8 @@ class _ImageItem extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Image.network(
-            post.sampleUrl,
+          Image(
+            image: CacheImage(post.imageUrl),
             fit: BoxFit.cover,
             loadingBuilder: (context, child, loadingProgress) {
               if (loadingProgress == null) return child;
@@ -509,27 +469,6 @@ class _ImageItem extends StatelessWidget {
               );
             },
           ),
-          // Index badge
-          Positioned(
-            left: 6,
-            top: 6,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: NeoBrutalism.shapeDecoration(
-                color: NeoBrutalism.green,
-                radius: 6,
-                hasShadow: false,
-              ),
-              child: Text(
-                '#${index + 1}',
-                style: const TextStyle(
-                  color: NeoBrutalism.white,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 11,
-                ),
-              ),
-            ),
-          ),
           // Dimension badge
           Positioned(
             left: 6,
@@ -542,39 +481,12 @@ class _ImageItem extends StatelessWidget {
                 hasShadow: false,
               ),
               child: Text(
-                '${post.sampleWidth.round()}×${post.sampleHeight.round()}',
+                '${post.width}×${post.height}',
                 style: const TextStyle(
                   color: NeoBrutalism.white,
                   fontWeight: FontWeight.w600,
                   fontSize: 10,
                 ),
-              ),
-            ),
-          ),
-          // Score badge
-          Positioned(
-            right: 6,
-            bottom: 6,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: NeoBrutalism.shapeDecoration(
-                color: NeoBrutalism.yellow,
-                radius: 6,
-                hasShadow: false,
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.favorite_rounded, size: 12),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${post.score}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 11,
-                    ),
-                  ),
-                ],
               ),
             ),
           ),

@@ -2,6 +2,7 @@ import 'package:easy_refresh/easy_refresh.dart';
 import 'package:flexbox_layout/flexbox_layout.dart';
 import 'package:flutter/material.dart';
 
+import '../shared/safe_state_mixin.dart';
 import '../theme/neo_brutalism.dart';
 import '../widgets/neo_easy_refresh.dart';
 import '../widgets/neo_widgets.dart';
@@ -44,7 +45,7 @@ class CatGalleryPage extends StatefulWidget {
   State<CatGalleryPage> createState() => _CatGalleryPageState();
 }
 
-class _CatGalleryPageState extends State<CatGalleryPage> {
+class _CatGalleryPageState extends State<CatGalleryPage> with SafeStateMixin {
   /// Current total items (increases with load more)
   int _totalItems = catImages.length;
 
@@ -72,7 +73,7 @@ class _CatGalleryPageState extends State<CatGalleryPage> {
 
   Future<void> _onRefresh() async {
     await Future<void>.delayed(const Duration(milliseconds: 500));
-    setState(() {
+    setSafeState(() {
       _totalItems = catImages.length;
     });
     _refreshController.finishRefresh();
@@ -81,7 +82,7 @@ class _CatGalleryPageState extends State<CatGalleryPage> {
 
   Future<void> _onLoad() async {
     await Future<void>.delayed(const Duration(milliseconds: 300));
-    setState(() {
+    setSafeState(() {
       _totalItems += _itemsPerLoad;
     });
     // Infinite loading - never ends
@@ -282,7 +283,7 @@ class _CatGalleryPageState extends State<CatGalleryPage> {
                     valueLabel: '${_targetRowHeight.round()}px',
                     onChanged: (v) {
                       setSheetState(() {});
-                      setState(() => _targetRowHeight = v);
+                      setSafeState(() => _targetRowHeight = v);
                     },
                   ),
                 ),

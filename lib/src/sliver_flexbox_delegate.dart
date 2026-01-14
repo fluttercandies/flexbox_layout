@@ -816,3 +816,244 @@ class SliverFlexboxDelegateWithBuilder extends SliverFlexboxDelegate {
     );
   }
 }
+
+/// A delegate that provides continuous scaling with smooth visual transitions.
+///
+/// Unlike other delegates that may have discrete "jumps" when the number of
+/// columns changes, this delegate ensures smooth continuous scaling by:
+/// 1. Using a target extent as the basis for item sizing
+/// 2. Supporting smooth transition from unfilled to filled rows via [fillFactor]
+///
+/// This creates a Google Photos-like pinch-to-zoom experience where the
+/// visual feedback is immediate and follows the gesture precisely.
+///
+/// Example:
+/// ```dart
+/// SliverFlexboxDelegateWithDirectExtent(
+///   aspectRatios: images.map((img) => img.width / img.height).toList(),
+///   targetExtent: controller.currentExtent,
+///   fillFactor: controller.fillFactor, // 0.0 during scaling, animates to 1.0 after
+///   mainAxisSpacing: 2,
+///   crossAxisSpacing: 2,
+/// )
+/// ```
+class SliverFlexboxDelegateWithDirectExtent extends SliverFlexboxDelegate {
+  /// Creates a delegate with direct extent control.
+  const SliverFlexboxDelegateWithDirectExtent({
+    required this.aspectRatios,
+    required this.targetExtent,
+    this.fillFactor = 1.0,
+    this.flexDirection = FlexDirection.row,
+    this.flexWrap = FlexWrap.wrap,
+    this.justifyContent = JustifyContent.flexStart,
+    this.alignItems = AlignItems.stretch,
+    this.alignContent = AlignContent.flexStart,
+    this.mainAxisSpacing = 0.0,
+    this.crossAxisSpacing = 0.0,
+    this.maxLines,
+  }) : assert(targetExtent > 0),
+       assert(fillFactor >= 0.0 && fillFactor <= 1.0);
+
+  /// The aspect ratio (width / height) for each child.
+  final List<double> aspectRatios;
+
+  /// The target extent (height for vertical scroll, width for horizontal).
+  /// Items will be sized exactly at this height (multiplied by their aspect ratio).
+  /// This value should change smoothly during pinch gestures.
+  final double targetExtent;
+
+  /// Controls how much rows are filled to the available width.
+  ///
+  /// - 0.0: Items are sized exactly at targetExtent, rows may have empty space
+  /// - 1.0: Items are scaled to fill the row completely
+  /// - Values between provide smooth interpolation for transitions
+  ///
+  /// Use this to animate from "scaling mode" (0.0) to "filled mode" (1.0)
+  /// when a pinch gesture ends.
+  final double fillFactor;
+
+  @override
+  final FlexDirection flexDirection;
+
+  @override
+  final FlexWrap flexWrap;
+
+  @override
+  final JustifyContent justifyContent;
+
+  @override
+  final AlignItems alignItems;
+
+  @override
+  final AlignContent alignContent;
+
+  @override
+  final double mainAxisSpacing;
+
+  @override
+  final double crossAxisSpacing;
+
+  @override
+  final int? maxLines;
+
+  @override
+  FlexItemData getFlexItemData(int index) {
+    return const FlexItemData(flexGrow: 0.0, flexShrink: 0.0);
+  }
+
+  @override
+  SliverFlexboxLayout getLayout(
+    SliverConstraints constraints, {
+    required int childCount,
+  }) {
+    final crossAxisExtent = constraints.crossAxisExtent;
+    final actualChildCount = math.min(childCount, aspectRatios.length);
+
+    if (actualChildCount == 0) {
+      return SliverFlexboxLayout(
+        lines: const [],
+        crossAxisExtent: crossAxisExtent,
+        mainAxisSpacing: mainAxisSpacing,
+        crossAxisSpacing: crossAxisSpacing,
+      );
+    }
+
+    final lines = <SliverFlexboxLine>[];
+    int currentLineStart = 0;
+    double currentLineWidth = 0.0;
+    List<_DirectExtentItem> pendingItems = [];
+
+    for (int i = 0; i < actualChildCount; i++) {
+      final aspectRatio = aspectRatios[i];
+      // Item width is directly proportional to targetExtent
+      final itemWidth = targetExtent * aspectRatio;
+      final itemHeight = targetExtent;
+
+      final spacingNeeded = pendingItems.isEmpty ? 0.0 : crossAxisSpacing;
+      final projectedWidth = currentLineWidth + spacingNeeded + itemWidth;
+
+      // Start a new line when items exceed available width
+      if (pendingItems.isNotEmpty && projectedWidth > crossAxisExtent) {
+        // Create the line with items at their exact target size
+        lines.add(_createDirectLine(
+          pendingItems: pendingItems,
+          lineStart: currentLineStart,
+          rowHeight: targetExtent,
+          availableWidth: crossAxisExtent,
+          fillFactor: fillFactor,
+        ));
+
+        // Start new line
+        currentLineStart = i;
+        currentLineWidth = itemWidth;
+        pendingItems = [
+          _DirectExtentItem(
+            index: i,
+            width: itemWidth,
+            height: itemHeight,
+            aspectRatio: aspectRatio,
+          ),
+        ];
+      } else {
+        currentLineWidth = projectedWidth;
+        pendingItems.add(_DirectExtentItem(
+          index: i,
+          width: itemWidth,
+          height: itemHeight,
+          aspectRatio: aspectRatio,
+        ));
+      }
+    }
+
+    // Add the last line (don't fill the last line to avoid stretching)
+    if (pendingItems.isNotEmpty) {
+      lines.add(_createDirectLine(
+        pendingItems: pendingItems,
+        lineStart: currentLineStart,
+        rowHeight: targetExtent,
+        availableWidth: crossAxisExtent,
+        fillFactor: 0.0, // Last line never fills
+      ));
+    }
+
+    return SliverFlexboxLayout(
+      lines: lines,
+      crossAxisExtent: crossAxisExtent,
+      mainAxisSpacing: mainAxisSpacing,
+      crossAxisSpacing: crossAxisSpacing,
+    );
+  }
+
+  SliverFlexboxLine _createDirectLine({
+    required List<_DirectExtentItem> pendingItems,
+    required int lineStart,
+    required double rowHeight,
+    required double availableWidth,
+    required double fillFactor,
+  }) {
+    final itemCount = pendingItems.length;
+    final totalSpacing = crossAxisSpacing * (itemCount - 1);
+    
+    // Calculate total base width of all items
+    double totalBaseWidth = 0.0;
+    for (final item in pendingItems) {
+      totalBaseWidth += item.width;
+    }
+    
+    // Calculate scale factor to fill the row
+    final availableForItems = availableWidth - totalSpacing;
+    final fillScale = availableForItems / totalBaseWidth;
+    
+    // Interpolate between 1.0 (no fill) and fillScale (full fill)
+    final actualScale = 1.0 + (fillScale - 1.0) * fillFactor;
+    final actualRowHeight = rowHeight * actualScale;
+    
+    final items = <FlexLineItem>[];
+    double crossAxisOffset = 0.0;
+    double totalWidth = 0.0;
+
+    for (int i = 0; i < pendingItems.length; i++) {
+      final item = pendingItems[i];
+      final actualItemWidth = item.width * actualScale;
+
+      items.add(FlexLineItem(
+        index: item.index,
+        mainAxisExtent: actualItemWidth,
+        crossAxisExtent: actualRowHeight,
+        crossAxisOffset: crossAxisOffset,
+        flexGrow: 0.0,
+        flexShrink: 0.0,
+        originalMainAxisExtent: item.width,
+      ));
+
+      crossAxisOffset += actualItemWidth;
+      if (i < pendingItems.length - 1) {
+        crossAxisOffset += crossAxisSpacing;
+      }
+      totalWidth = crossAxisOffset;
+    }
+
+    return SliverFlexboxLine(
+      firstIndex: lineStart,
+      lastIndex: lineStart + pendingItems.length - 1,
+      mainAxisExtent: actualRowHeight,
+      crossAxisExtent: totalWidth,
+      itemCount: pendingItems.length,
+      items: items,
+    );
+  }
+}
+
+class _DirectExtentItem {
+  const _DirectExtentItem({
+    required this.index,
+    required this.width,
+    required this.height,
+    required this.aspectRatio,
+  });
+
+  final int index;
+  final double width;
+  final double height;
+  final double aspectRatio;
+}
