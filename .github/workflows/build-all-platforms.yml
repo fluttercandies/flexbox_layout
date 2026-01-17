@@ -1,4 +1,5 @@
-# Build and release multi-platform Flutter app
+# Build and release multi-platform Flutter example app
+# This workflow is reusable - just update the env variables at the top
 name: Build All Platforms
 
 on:
@@ -18,21 +19,61 @@ concurrency:
   group: "pages"
   cancel-in-progress: false
 
+#####################################
+# PROJECT-SPECIFIC CONFIGURATION
+# Update these values for your project
+#####################################
 env:
-  # Android signing configuration (modify here when copying to other projects)
-  ANDROID_KEYSTORE_FILE: keystore.jks
-  ANDROID_KEYSTORE_SECRET: flexbox123          # Keystore password
-  ANDROID_KEY_ALIAS: release                   # Key alias
-  ANDROID_KEY_PASSWORD: flexbox123             # Key password
-  ANDROID_KEY_DNAME: 'CN=Flexbox Release,O=Flexbox,C=US'  # Certificate info
+  # Project Info
+  PROJECT_NAME: Flexbox Layout
+  PROJECT_SLUG: flexbox_layout
+  PROJECT_PACKAGE: flexbox_layout
+  EXAMPLE_DIR: example
 
-  # Web build configuration
-  WEB_BASE_HREF: /flexbox_layout/              # Base href for web deployment
+  # Android signing configuration
+  ANDROID_KEYSTORE_FILE: keystore.jks
+  ANDROID_KEYSTORE_SECRET: flexbox123
+  ANDROID_KEY_ALIAS: release
+  ANDROID_KEY_PASSWORD: flexbox123
+  ANDROID_KEY_DNAME: 'CN=Flexbox Layout Release,O=FlutterCandies,C=CN'
+
+  # Web build configuration (GitHub Pages base href)
+  WEB_BASE_HREF: /flexbox_layout/
+
+  # Flutter configuration
+  FLUTTER_CHANNEL: stable
 
 jobs:
+  #####################################
+  # Test library first
+  #####################################
+  test-library:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Analyze code
+        run: flutter analyze
+
+  #####################################
   # Prepare release info
+  #####################################
   prepare:
     runs-on: ubuntu-latest
+    needs: test-library
     outputs:
       release_tag: ${{ steps.tag.outputs.tag }}
       release_name: ${{ steps.tag.outputs.name }}
@@ -45,13 +86,14 @@ jobs:
       - name: Generate release tag
         id: tag
         run: |
-          # Format: YYYYMMDD-shortref (e.g., 20250115-a1b2c3d)
           DATE=$(date +'%Y%m%d')
           SHORT_REF=$(git rev-parse --short HEAD)
           echo "tag=$DATE-$SHORT_REF" >> $GITHUB_OUTPUT
           echo "name=Release $DATE-$SHORT_REF" >> $GITHUB_OUTPUT
 
+  #####################################
   # Android build (multi-architecture)
+  #####################################
   build-android:
     runs-on: ubuntu-latest
     needs: prepare
@@ -65,7 +107,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
       - name: Setup Java
@@ -76,12 +118,11 @@ jobs:
 
       - name: Get dependencies
         run: flutter pub get
-        working-directory: example
+        working-directory: ${{ env.EXAMPLE_DIR }}
 
       - name: Generate Android keystore
         run: |
-          cd example/android/app
-          # Generate signing keystore
+          cd ${{ env.EXAMPLE_DIR }}/android/app
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > ${{ env.ANDROID_KEYSTORE_FILE }}
           else
@@ -92,7 +133,6 @@ jobs:
               -keypass '${{ env.ANDROID_KEY_PASSWORD }}' \
               -dname '${{ env.ANDROID_KEY_DNAME }}'
           fi
-          # Add to gitignore (if not already added)
           if ! grep -q "${{ env.ANDROID_KEYSTORE_FILE }}" .gitignore 2>/dev/null; then
             echo "${{ env.ANDROID_KEYSTORE_FILE }}" >> .gitignore
           fi
@@ -101,19 +141,15 @@ jobs:
 
       - name: Configure Android signing
         run: |
-          cd example/android/app
-          # Create signing config file gradle.properties
+          cd ${{ env.EXAMPLE_DIR }}/android/app
           printf '\n# Signing config\n' >> gradle.properties
           printf 'RELEASE_STORE_FILE=${{ env.ANDROID_KEYSTORE_FILE }}\n' >> gradle.properties
           printf 'RELEASE_STORE_PASSWORD=${{ env.ANDROID_KEYSTORE_SECRET }}\n' >> gradle.properties
           printf 'RELEASE_KEY_ALIAS=${{ env.ANDROID_KEY_ALIAS }}\n' >> gradle.properties
           printf 'RELEASE_KEY_PASSWORD=${{ env.ANDROID_KEY_PASSWORD }}\n' >> gradle.properties
 
-          # Backup original build.gradle.kts
           cp build.gradle.kts build.gradle.kts.orig
 
-          # Modify build.gradle.kts to add signing config
-          # Add signingConfigs inside android {} block
           awk '
           /^android \{/ {
             print
@@ -137,7 +173,7 @@ jobs:
 
       - name: Build APK for ${{ matrix.arch }}
         run: |
-          cd example
+          cd ${{ env.EXAMPLE_DIR }}
           if [ "${{ matrix.arch }}" = "universal" ]; then
             flutter build apk --release --target-platform android-arm64,android-x64
           else
@@ -146,11 +182,11 @@ jobs:
 
       - name: Rename APK
         run: |
-          cd example/build/app/outputs/flutter-apk
+          cd ${{ env.EXAMPLE_DIR }}/build/app/outputs/flutter-apk
           if [ "${{ matrix.arch }}" = "universal" ]; then
-            mv app-release.apk flexbox-android-universal.apk
+            mv app-release.apk ${{ env.PROJECT_SLUG }}-android-universal.apk
           else
-            mv app-release.apk flexbox-android-${{ matrix.arch }}.apk
+            mv app-release.apk ${{ env.PROJECT_SLUG }}-android-${{ matrix.arch }}.apk
           fi
 
       - name: Upload APK artifact
@@ -158,12 +194,14 @@ jobs:
         with:
           name: android-${{ matrix.arch }}
           path: |
-            example/build/app/outputs/flutter-apk/flexbox-android-${{ matrix.arch }}.apk
-            example/build/app/outputs/flutter-apk/flexbox-android-universal.apk
+            ${{ env.EXAMPLE_DIR }}/build/app/outputs/flutter-apk/${{ env.PROJECT_SLUG }}-android-${{ matrix.arch }}.apk
+            ${{ env.EXAMPLE_DIR }}/build/app/outputs/flutter-apk/${{ env.PROJECT_SLUG }}-android-universal.apk
           retention-days: 30
           if-no-files-found: ignore
 
-  # iOS build (requires macOS)
+  #####################################
+  # iOS build
+  #####################################
   build-ios:
     runs-on: macos-latest
     needs: prepare
@@ -174,36 +212,33 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
       - name: Get dependencies
         run: flutter pub get
-        working-directory: example
+        working-directory: ${{ env.EXAMPLE_DIR }}
 
       - name: Build iOS (no codesign)
         run: |
-          cd example
+          cd ${{ env.EXAMPLE_DIR }}
           flutter build ios --release --no-codesign
 
       - name: Create iOS bundle (zip)
         run: |
-          cd example
+          cd ${{ env.EXAMPLE_DIR }}
           mkdir -p build/ios-bundle/Runner.app
           cp -r build/ios/iphoneos/Runner.app/* build/ios-bundle/Runner.app/
           cd build/ios-bundle
-          zip -r ../../flexbox-ios.zip .
+          zip -r ../../${{ env.PROJECT_SLUG }}-ios.zip .
           cd ../..
 
       - name: Create IPA
         run: |
-          cd example
-          # Create ipa package structure
+          cd ${{ env.EXAMPLE_DIR }}
           mkdir -p Payload
           cp -r build/ios/iphoneos/Runner.app Payload/
-          # Package as ipa
-          zip -r flexbox-ios.ipa Payload
-          # Cleanup
+          zip -r ${{ env.PROJECT_SLUG }}-ios.ipa Payload
           rm -rf Payload
 
       - name: Upload iOS artifacts
@@ -211,11 +246,13 @@ jobs:
         with:
           name: ios
           path: |
-            example/flexbox-ios.zip
-            example/flexbox-ios.ipa
+            ${{ env.EXAMPLE_DIR }}/${{ env.PROJECT_SLUG }}-ios.zip
+            ${{ env.EXAMPLE_DIR }}/${{ env.PROJECT_SLUG }}-ios.ipa
           retention-days: 30
 
+  #####################################
   # Windows build
+  #####################################
   build-windows:
     runs-on: windows-latest
     needs: prepare
@@ -226,12 +263,12 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
       - name: Get dependencies
         run: flutter pub get
-        working-directory: example
+        working-directory: ${{ env.EXAMPLE_DIR }}
 
       - name: Install Inno Setup
         run: |
@@ -239,52 +276,55 @@ jobs:
 
       - name: Build Windows
         run: |
-          cd example
+          cd ${{ env.EXAMPLE_DIR }}
           flutter build windows --release
 
       - name: Create Inno Setup script
+        shell: pwsh
         run: |
-          $script = @'
+          $script = @"
           [Setup]
-          AppName=FlexBox
+          AppName=${{ env.PROJECT_NAME }}
           AppVersion=1.0.0
-          DefaultDirName={pf}\FlexBox
-          DefaultGroupName=FlexBox
-          OutputBaseFilename=flexbox-windows-setup
+          DefaultDirName={pf}\${{ env.PROJECT_NAME }}
+          DefaultGroupName=${{ env.PROJECT_NAME }}
+          OutputBaseFilename=${{ env.PROJECT_SLUG }}-windows-setup
           Compression=lzma2
           SolidCompression=yes
-          OutputDir=..\..\
+          OutputDir=.
 
           [Files]
           Source: "build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
           [Icons]
-          Name: "{group}\FlexBox"; Filename: "{app}\flexbox.exe"
-          Name: "{commondesktop}\FlexBox"; Filename: "{app}\flexbox.exe"
-          '@
-          $script | Out-File -FilePath example\flexbox-setup.iss -Encoding UTF8
+          Name: "{group}\${{ env.PROJECT_NAME }}"; Filename: "{app}\${{ env.PROJECT_PACKAGE }}.exe"
+          Name: "{commondesktop}\${{ env.PROJECT_NAME }}"; Filename: "{app}\${{ env.PROJECT_PACKAGE }}.exe"
+          "@
+          $script | Out-File -FilePath ${{ env.EXAMPLE_DIR }}\setup.iss -Encoding UTF8
 
       - name: Create installer with Inno Setup
         run: |
-          cd example
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" flexbox-setup.iss
+          cd ${{ env.EXAMPLE_DIR }}
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" setup.iss
 
       - name: Create Windows zip
         run: |
-          cd example
-          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath flexbox-windows.zip
+          cd ${{ env.EXAMPLE_DIR }}
+          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath ${{ env.PROJECT_SLUG }}-windows.zip
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows
           path: |
-            example/flexbox-windows.zip
-            flexbox-windows-setup.exe
+            ${{ env.EXAMPLE_DIR }}/${{ env.PROJECT_SLUG }}-windows.zip
+            ${{ env.EXAMPLE_DIR }}/${{ env.PROJECT_SLUG }}-windows-setup.exe
           retention-days: 30
           if-no-files-found: ignore
 
+  #####################################
   # Linux build
+  #####################################
   build-linux:
     runs-on: ubuntu-latest
     needs: prepare
@@ -295,7 +335,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
       - name: Install Linux dependencies
@@ -305,26 +345,28 @@ jobs:
 
       - name: Get dependencies
         run: flutter pub get
-        working-directory: example
+        working-directory: ${{ env.EXAMPLE_DIR }}
 
       - name: Build Linux
         run: |
-          cd example
+          cd ${{ env.EXAMPLE_DIR }}
           flutter build linux --release
 
       - name: Create Linux tarball
         run: |
-          cd example
-          tar -czf flexbox-linux.tar.gz -C build/linux/x64/release/bundle .
+          cd ${{ env.EXAMPLE_DIR }}
+          tar -czf ${{ env.PROJECT_SLUG }}-linux.tar.gz -C build/linux/x64/release/bundle .
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: example/flexbox-linux.tar.gz
+          path: ${{ env.EXAMPLE_DIR }}/${{ env.PROJECT_SLUG }}-linux.tar.gz
           retention-days: 30
 
+  #####################################
   # macOS build
+  #####################################
   build-macos:
     runs-on: macos-latest
     needs: prepare
@@ -335,34 +377,30 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
       - name: Get dependencies
         run: flutter pub get
-        working-directory: example
+        working-directory: ${{ env.EXAMPLE_DIR }}
 
       - name: Build macOS
         run: |
-          cd example
+          cd ${{ env.EXAMPLE_DIR }}
           flutter build macos --release
 
       - name: Create macOS zip
         run: |
-          cd example
+          cd ${{ env.EXAMPLE_DIR }}
           cd build/macos/Build/Products/Release
-          zip -r ../../../../../flexbox-macos.zip .
+          zip -r ../../../../../${{ env.PROJECT_SLUG }}-macos.zip .
 
       - name: Create DMG
         run: |
-          cd example
-          # Create temporary directory
+          cd ${{ env.EXAMPLE_DIR }}
           mkdir -p dmg/disk
-          # Copy app to temporary directory
           cp -r build/macos/Build/Products/Release/*.app dmg/disk/
-          # Create dmg
-          hdiutil create -volname "FlexBox" -srcfolder dmg/disk -ov -format UDZO flexbox-macos.dmg
-          # Cleanup
+          hdiutil create -volname "${{ env.PROJECT_NAME }}" -srcfolder dmg/disk -ov -format UDZO ${{ env.PROJECT_SLUG }}-macos.dmg
           rm -rf dmg
 
       - name: Upload macOS artifacts
@@ -370,13 +408,16 @@ jobs:
         with:
           name: macos
           path: |
-            example/flexbox-macos.zip
-            example/flexbox-macos.dmg
+            ${{ env.EXAMPLE_DIR }}/${{ env.PROJECT_SLUG }}-macos.zip
+            ${{ env.EXAMPLE_DIR }}/${{ env.PROJECT_SLUG }}-macos.dmg
           retention-days: 30
 
+  #####################################
   # Web build
+  #####################################
   build-web:
     runs-on: ubuntu-latest
+    needs: test-library
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -384,16 +425,16 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
       - name: Get dependencies
         run: flutter pub get
-        working-directory: example
+        working-directory: ${{ env.EXAMPLE_DIR }}
 
       - name: Build web
         run: flutter build web --release --base-href ${{ env.WEB_BASE_HREF }}
-        working-directory: example
+        working-directory: ${{ env.EXAMPLE_DIR }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -401,9 +442,11 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: example/build/web
+          path: ${{ env.EXAMPLE_DIR }}/build/web
 
+  #####################################
   # Deploy to GitHub Pages
+  #####################################
   deploy-web:
     environment:
       name: github-pages
@@ -416,7 +459,9 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
+  #####################################
   # Release all builds
+  #####################################
   release:
     runs-on: ubuntu-latest
     needs: [prepare, build-android, build-ios, build-windows, build-linux, build-macos]
@@ -449,8 +494,8 @@ jobs:
             artifacts/android-universal/*.apk
             artifacts/ios/*.ipa
             artifacts/ios/*.zip
-            artifacts/windows/**/*.exe
-            artifacts/windows/**/*.zip
+            artifacts/windows/*.exe
+            artifacts/windows/*.zip
             artifacts/linux/*.tar.gz
             artifacts/macos/*.dmg
             artifacts/macos/*.zip
@@ -468,14 +513,14 @@ jobs:
 
           | Platform | Format | File |
           |----------|--------|------|
-          | Android (arm64) | .apk | flexbox-android-arm64.apk |
-          | Android (x64) | .apk | flexbox-android-x64.apk |
-          | Android (Universal) | .apk | flexbox-android-universal.apk |
-          | iOS | .ipa | flexbox-ios.ipa |
-          | iOS | .zip | flexbox-ios.zip |
-          | Windows | .exe | flexbox-windows-setup.exe |
-          | Windows | .zip | flexbox-windows.zip |
-          | Linux | .tar.gz | flexbox-linux.tar.gz |
-          | macOS | .dmg | flexbox-macos.dmg |
-          | macOS | .zip | flexbox-macos.zip |
+          | Android (arm64) | .apk | ${{ env.PROJECT_SLUG }}-android-arm64.apk |
+          | Android (x64) | .apk | ${{ env.PROJECT_SLUG }}-android-x64.apk |
+          | Android (Universal) | .apk | ${{ env.PROJECT_SLUG }}-android-universal.apk |
+          | iOS | .ipa | ${{ env.PROJECT_SLUG }}-ios.ipa |
+          | iOS | .zip | ${{ env.PROJECT_SLUG }}-ios.zip |
+          | Windows | .exe | ${{ env.PROJECT_SLUG }}-windows-setup.exe |
+          | Windows | .zip | ${{ env.PROJECT_SLUG }}-windows.zip |
+          | Linux | .tar.gz | ${{ env.PROJECT_SLUG }}-linux.tar.gz |
+          | macOS | .dmg | ${{ env.PROJECT_SLUG }}-macos.dmg |
+          | macOS | .zip | ${{ env.PROJECT_SLUG }}-macos.zip |
           SUMMARY
