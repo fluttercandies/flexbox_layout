@@ -851,8 +851,8 @@ class SliverFlexboxDelegateWithDirectExtent extends SliverFlexboxDelegate {
     this.mainAxisSpacing = 0.0,
     this.crossAxisSpacing = 0.0,
     this.maxLines,
-  }) : assert(targetExtent > 0),
-       assert(fillFactor >= 0.0 && fillFactor <= 1.0);
+  })  : assert(targetExtent > 0),
+        assert(fillFactor >= 0.0 && fillFactor <= 1.0);
 
   /// The aspect ratio (width / height) for each child.
   final List<double> aspectRatios;
@@ -993,21 +993,21 @@ class SliverFlexboxDelegateWithDirectExtent extends SliverFlexboxDelegate {
   }) {
     final itemCount = pendingItems.length;
     final totalSpacing = crossAxisSpacing * (itemCount - 1);
-    
+
     // Calculate total base width of all items
     double totalBaseWidth = 0.0;
     for (final item in pendingItems) {
       totalBaseWidth += item.width;
     }
-    
+
     // Calculate scale factor to fill the row
     final availableForItems = availableWidth - totalSpacing;
     final fillScale = availableForItems / totalBaseWidth;
-    
+
     // Interpolate between 1.0 (no fill) and fillScale (full fill)
     final actualScale = 1.0 + (fillScale - 1.0) * fillFactor;
     final actualRowHeight = rowHeight * actualScale;
-    
+
     final items = <FlexLineItem>[];
     double crossAxisOffset = 0.0;
     double totalWidth = 0.0;

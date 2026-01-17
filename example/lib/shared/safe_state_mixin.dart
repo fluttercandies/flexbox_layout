@@ -47,7 +47,8 @@ mixin SafeStateMixin<T extends StatefulWidget> on State<T> {
 
     // Check if we're in a safe phase to call setState
     final phase = SchedulerBinding.instance.schedulerPhase;
-    final isSafePhase = phase == SchedulerPhase.idle ||
+    final isSafePhase =
+        phase == SchedulerPhase.idle ||
         phase == SchedulerPhase.postFrameCallbacks;
 
     if (isSafePhase) {
