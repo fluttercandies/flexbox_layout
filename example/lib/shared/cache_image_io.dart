@@ -12,7 +12,7 @@ import 'package:flutter/painting.dart' as painting;
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 
-final _loadLimiter = FLimit(10, queueStrategy: QueueStrategy.lifo);
+final _loadLimiter = FLimit(40, queueStrategy: QueueStrategy.alternating);
 
 /// Tracks which cache keys are currently being written to prevent concurrent writes
 final _pendingCacheWrites = <String>{};
