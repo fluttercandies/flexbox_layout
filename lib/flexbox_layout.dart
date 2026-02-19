@@ -52,6 +52,7 @@ export 'src/flex_item_data.dart';
 export 'src/flex_line.dart';
 export 'src/flexbox.dart';
 export 'src/flexbox_list.dart';
+export 'src/item_animation.dart';
 export 'src/render_flexbox.dart' show FlexboxParentData;
 export 'src/scalable_flexbox_controller.dart';
 export 'src/sliver_dynamic_flexbox.dart';
