@@ -59,6 +59,8 @@ class DynamicFlexboxList extends StatelessWidget {
     this.debounceDuration = const Duration(milliseconds: 150),
     this.aspectRatioChangeThreshold = 0.01,
     this.crossAxisExtentChangeThreshold = 1.0,
+    this.maxAspectRatioChecksPerLayout = 8,
+    this.aspectRatioCheckInterval = 12,
     this.aspectRatioGetter,
     this.scrollController,
     this.primary,
@@ -83,7 +85,9 @@ class DynamicFlexboxList extends StatelessWidget {
         assert(crossAxisSpacing >= 0),
         assert(minRowFillFactor > 0 && minRowFillFactor <= 1),
         assert(aspectRatioChangeThreshold >= 0),
-        assert(crossAxisExtentChangeThreshold >= 0);
+        assert(crossAxisExtentChangeThreshold >= 0),
+        assert(maxAspectRatioChecksPerLayout > 0),
+        assert(aspectRatioCheckInterval > 0);
 
   /// Called to build children for the list.
   ///
@@ -145,6 +149,14 @@ class DynamicFlexboxList extends StatelessWidget {
   /// ratio cache is cleared to recalculate the layout.
   /// Default is 1.0 pixel.
   final double crossAxisExtentChangeThreshold;
+
+  /// Maximum number of cached items to re-check with intrinsic measurement
+  /// in each layout pass.
+  final int maxAspectRatioChecksPerLayout;
+
+  /// Minimum number of layout passes between intrinsic re-checks for
+  /// the same cached item.
+  final int aspectRatioCheckInterval;
 
   /// Optional callback to provide aspect ratios for children.
   final AspectRatioGetter? aspectRatioGetter;
@@ -232,6 +244,8 @@ class DynamicFlexboxList extends StatelessWidget {
         debounceDuration: debounceDuration,
         aspectRatioChangeThreshold: aspectRatioChangeThreshold,
         crossAxisExtentChangeThreshold: crossAxisExtentChangeThreshold,
+        maxAspectRatioChecksPerLayout: maxAspectRatioChecksPerLayout,
+        aspectRatioCheckInterval: aspectRatioCheckInterval,
         lastChildLayoutTypeBuilder: lastChildLayoutTypeBuilder,
         collectGarbage: collectGarbage,
         viewportBuilder: viewportBuilder,

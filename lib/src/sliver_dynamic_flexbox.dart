@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:extended_list_library/extended_list_library.dart';
 import 'package:flutter/rendering.dart';
@@ -26,6 +27,8 @@ class SliverDynamicFlexboxDelegate extends ExtendedListDelegate {
     this.debounceDuration = const Duration(milliseconds: 150),
     this.aspectRatioChangeThreshold = 0.01,
     this.crossAxisExtentChangeThreshold = 1.0,
+    this.maxAspectRatioChecksPerLayout = 8,
+    this.aspectRatioCheckInterval = 12,
     super.lastChildLayoutTypeBuilder,
     super.collectGarbage,
     super.viewportBuilder,
@@ -37,7 +40,9 @@ class SliverDynamicFlexboxDelegate extends ExtendedListDelegate {
         assert(minRowFillFactor > 0 && minRowFillFactor <= 1),
         assert(defaultAspectRatio > 0),
         assert(aspectRatioChangeThreshold >= 0),
-        assert(crossAxisExtentChangeThreshold >= 0);
+        assert(crossAxisExtentChangeThreshold >= 0),
+        assert(maxAspectRatioChecksPerLayout > 0),
+        assert(aspectRatioCheckInterval > 0);
 
   final double targetRowHeight;
   final double mainAxisSpacing;
@@ -77,6 +82,13 @@ class SliverDynamicFlexboxDelegate extends ExtendedListDelegate {
   /// Default is 1.0 pixel.
   final double crossAxisExtentChangeThreshold;
 
+  /// Maximum number of cached items to re-check via intrinsic measurement
+  /// during a single layout pass.
+  final int maxAspectRatioChecksPerLayout;
+
+  /// Minimum number of layout passes between re-checks for the same item.
+  final int aspectRatioCheckInterval;
+
   /// Optional callback to provide aspect ratios for children.
   /// If provided, this takes precedence over measuring children.
   final AspectRatioGetter? aspectRatioGetter;
@@ -89,6 +101,10 @@ class SliverDynamicFlexboxDelegate extends ExtendedListDelegate {
   }
 
   bool shouldRelayout(SliverDynamicFlexboxDelegate oldDelegate) {
+    if (aspectRatioGetter != null || oldDelegate.aspectRatioGetter != null) {
+      // Getter output may change without callback identity changes.
+      return true;
+    }
     return oldDelegate.targetRowHeight != targetRowHeight ||
         oldDelegate.mainAxisSpacing != mainAxisSpacing ||
         oldDelegate.crossAxisSpacing != crossAxisSpacing ||
@@ -98,6 +114,9 @@ class SliverDynamicFlexboxDelegate extends ExtendedListDelegate {
         oldDelegate.aspectRatioChangeThreshold != aspectRatioChangeThreshold ||
         oldDelegate.crossAxisExtentChangeThreshold !=
             crossAxisExtentChangeThreshold ||
+        oldDelegate.maxAspectRatioChecksPerLayout !=
+            maxAspectRatioChecksPerLayout ||
+        oldDelegate.aspectRatioCheckInterval != aspectRatioCheckInterval ||
         oldDelegate.closeToTrailing != closeToTrailing;
   }
 }
@@ -184,12 +203,25 @@ class RenderSliverDynamicFlexbox extends RenderSliverMultiBoxAdaptor
   SliverDynamicFlexboxDelegate _flexboxDelegate;
   SliverDynamicFlexboxDelegate get flexboxDelegate => _flexboxDelegate;
   set flexboxDelegate(SliverDynamicFlexboxDelegate value) {
-    if (_flexboxDelegate == value) return;
-    if (_flexboxDelegate.shouldRelayout(value)) {
-      _aspectRatioCache.clear();
+    if (identical(_flexboxDelegate, value)) return;
+    final oldDelegate = _flexboxDelegate;
+    final needsRelayout = value.shouldRelayout(oldDelegate);
+    _flexboxDelegate = value;
+    if (needsRelayout) {
+      final preserveAspectCache = oldDelegate.aspectRatioGetter != null &&
+          value.aspectRatioGetter != null;
+      if (preserveAspectCache) {
+        _pendingUpdates.clear();
+        _debounceTimer?.cancel();
+        _debounceTimer = null;
+        _lastAspectCheckLayoutPass.clear();
+        _aspectProbeCursor = firstChild;
+        _invalidateRowCache();
+      } else {
+        _clearAspectRatioCache(clearPendingUpdates: true);
+      }
       markNeedsLayout();
     }
-    _flexboxDelegate = value;
   }
 
   @override
@@ -201,13 +233,53 @@ class RenderSliverDynamicFlexbox extends RenderSliverMultiBoxAdaptor
   /// Indices needing update after debounce.
   final Set<int> _pendingUpdates = {};
 
+  /// Last layout pass that performed an intrinsic check for a child index.
+  final Map<int, int> _lastAspectCheckLayoutPass = {};
+
   Timer? _debounceTimer;
   double? _lastCrossAxisExtent;
+  int _layoutPass = 0;
+  int _remainingAspectChecks = 0;
+  int _aspectRatioRevision = 0;
+  int _maxSequentialCachedIndex = -1;
+  RenderBox? _aspectProbeCursor;
+
+  List<_RowLayout>? _rowCache;
+  int? _rowCacheMaxIndex;
+  double? _rowCacheCrossAxisExtent;
+  int _rowCacheAspectRevision = -1;
+  int _rowCacheLayoutPass = -1;
+  bool _rowCacheBuiltByIndex = false;
+  int? _rowCacheFirstAttachedIndex;
 
   @override
   void dispose() {
     _debounceTimer?.cancel();
     super.dispose();
+  }
+
+  void _clearAspectRatioCache({required bool clearPendingUpdates}) {
+    _aspectRatioCache.clear();
+    _lastAspectCheckLayoutPass.clear();
+    _maxSequentialCachedIndex = -1;
+    _aspectProbeCursor = null;
+    if (clearPendingUpdates) {
+      _pendingUpdates.clear();
+      _debounceTimer?.cancel();
+      _debounceTimer = null;
+    }
+    _aspectRatioRevision++;
+    _invalidateRowCache();
+  }
+
+  void _invalidateRowCache() {
+    _rowCache = null;
+    _rowCacheMaxIndex = null;
+    _rowCacheCrossAxisExtent = null;
+    _rowCacheAspectRevision = -1;
+    _rowCacheLayoutPass = -1;
+    _rowCacheBuiltByIndex = false;
+    _rowCacheFirstAttachedIndex = null;
   }
 
   @override
@@ -228,40 +300,191 @@ class RenderSliverDynamicFlexbox extends RenderSliverMultiBoxAdaptor
     final parentData = child.parentData as SliverDynamicFlexboxParentData;
 
     // Use external getter if provided
-    if (_flexboxDelegate.aspectRatioGetter != null) {
-      final ratio = _flexboxDelegate.aspectRatioGetter!(index);
-      _aspectRatioCache[index] = ratio;
+    final aspectRatioGetter = _flexboxDelegate.aspectRatioGetter;
+    if (aspectRatioGetter != null) {
+      final ratio = _sanitizeAspectRatio(aspectRatioGetter(index));
+      final cached = _aspectRatioCache[index];
+      if (cached == null ||
+          (cached - ratio).abs() >
+              _flexboxDelegate.aspectRatioChangeThreshold) {
+        _setCachedAspectRatio(index, ratio);
+        _aspectRatioRevision++;
+        _invalidateRowCache();
+      }
       return ratio;
     }
 
-    // Measure current intrinsic size
-    final w = child.getMaxIntrinsicWidth(double.infinity);
-    final h = child.getMaxIntrinsicHeight(double.infinity);
-
-    double currentRatio;
-    if (w > 0 && h > 0) {
-      currentRatio = w / h;
-    } else {
-      currentRatio = _flexboxDelegate.defaultAspectRatio;
+    final cached = _aspectRatioCache[index];
+    if (cached != null) {
+      _probeCachedAspectRatio(
+        index: index,
+        child: child,
+        cachedRatio: cached,
+      );
+      return _sanitizeAspectRatio(cached);
     }
 
-    // Check if changed from last measurement using configurable threshold
-    final lastRatio = parentData.lastMeasuredRatio;
-    if (lastRatio != null &&
-        (lastRatio - currentRatio).abs() >
-            _flexboxDelegate.aspectRatioChangeThreshold) {
+    final currentRatio = _measureAspectRatio(child);
+    parentData.lastMeasuredRatio = currentRatio;
+    _setCachedAspectRatio(index, currentRatio);
+    _aspectRatioRevision++;
+    _invalidateRowCache();
+    return currentRatio;
+  }
+
+  bool _isDefaultLikeAspectRatio(double ratio) {
+    return (ratio - _flexboxDelegate.defaultAspectRatio).abs() <=
+        _flexboxDelegate.aspectRatioChangeThreshold;
+  }
+
+  void _setCachedAspectRatio(int index, double ratio) {
+    _aspectRatioCache[index] = ratio;
+    if (index == _maxSequentialCachedIndex + 1) {
+      while (_aspectRatioCache.containsKey(_maxSequentialCachedIndex + 1)) {
+        _maxSequentialCachedIndex++;
+      }
+    }
+  }
+
+  bool _removeCachedAspectRatio(int index) {
+    final removed = _aspectRatioCache.remove(index) != null;
+    if (!removed) return false;
+    if (index <= _maxSequentialCachedIndex) {
+      _maxSequentialCachedIndex = index - 1;
+      while (_aspectRatioCache.containsKey(_maxSequentialCachedIndex + 1)) {
+        _maxSequentialCachedIndex++;
+      }
+    }
+    return true;
+  }
+
+  bool _canBuildRowsFromIndex(int maxIndex) {
+    if (maxIndex < 0) return true;
+    if (_flexboxDelegate.aspectRatioGetter != null) return true;
+    return _maxSequentialCachedIndex >= maxIndex;
+  }
+
+  double _getAspectRatioForIndex(int index) {
+    final getter = _flexboxDelegate.aspectRatioGetter;
+    if (getter != null) {
+      final ratio = _sanitizeAspectRatio(getter(index));
+      final cached = _aspectRatioCache[index];
+      if (cached == null ||
+          (cached - ratio).abs() >
+              _flexboxDelegate.aspectRatioChangeThreshold) {
+        _setCachedAspectRatio(index, ratio);
+        _aspectRatioRevision++;
+        _invalidateRowCache();
+      }
+      return ratio;
+    }
+    final cached = _aspectRatioCache[index];
+    if (cached == null) return _flexboxDelegate.defaultAspectRatio;
+    return _sanitizeAspectRatio(cached);
+  }
+
+  bool _shouldProbeAspectRatio(
+    int index, {
+    required bool prioritize,
+  }) {
+    if (_remainingAspectChecks <= 0) return false;
+    final lastCheckedPass = _lastAspectCheckLayoutPass[index];
+    if (lastCheckedPass == _layoutPass) {
+      return false;
+    }
+
+    if (!prioritize) {
+      if (lastCheckedPass != null &&
+          (_layoutPass - lastCheckedPass) <
+              _flexboxDelegate.aspectRatioCheckInterval) {
+        return false;
+      }
+    }
+
+    _remainingAspectChecks--;
+    _lastAspectCheckLayoutPass[index] = _layoutPass;
+    return true;
+  }
+
+  void _probeCachedAspectRatio({
+    required int index,
+    required RenderBox child,
+    required double cachedRatio,
+  }) {
+    final shouldProbe = _shouldProbeAspectRatio(
+      index,
+      prioritize: _isDefaultLikeAspectRatio(cachedRatio),
+    );
+    if (!shouldProbe) return;
+
+    final currentRatio = _measureAspectRatio(child);
+    if ((_sanitizeAspectRatio(cachedRatio) - currentRatio).abs() >
+        _flexboxDelegate.aspectRatioChangeThreshold) {
       _scheduleUpdate(index);
     }
+    final parentData = child.parentData as SliverDynamicFlexboxParentData;
     parentData.lastMeasuredRatio = currentRatio;
+  }
 
-    // Return cached value if available (stable layout)
-    if (_aspectRatioCache.containsKey(index)) {
-      return _aspectRatioCache[index]!;
+  double _measureAspectRatio(RenderBox child) {
+    final width = child.getMaxIntrinsicWidth(double.infinity);
+    final height = child.getMaxIntrinsicHeight(double.infinity);
+    if (width.isFinite && height.isFinite && width > 0 && height > 0) {
+      return _sanitizeAspectRatio(width / height);
+    }
+    return _flexboxDelegate.defaultAspectRatio;
+  }
+
+  double _sanitizeAspectRatio(double ratio) {
+    if (ratio.isFinite && ratio > 0) {
+      return ratio;
+    }
+    return _flexboxDelegate.defaultAspectRatio;
+  }
+
+  void _probeAspectRatioChanges() {
+    if (_flexboxDelegate.aspectRatioGetter != null) return;
+    if (_remainingAspectChecks <= 0) return;
+    if (firstChild == null) return;
+
+    RenderBox? startChild = _aspectProbeCursor;
+    if (startChild == null || startChild.parent != this) {
+      startChild = firstChild;
+    }
+    RenderBox? child = startChild;
+
+    bool wrapped = false;
+    int scanned = 0;
+    final int maxScan = _remainingAspectChecks * 16;
+    while (child != null && _remainingAspectChecks > 0 && scanned < maxScan) {
+      scanned++;
+      final parentData = child.parentData as SliverDynamicFlexboxParentData;
+      final index = parentData.index;
+      final cachedRatio = index != null ? _aspectRatioCache[index] : null;
+      if (index != null && cachedRatio != null) {
+        _probeCachedAspectRatio(
+          index: index,
+          child: child,
+          cachedRatio: cachedRatio,
+        );
+      }
+
+      final next = childAfter(child);
+      if (next != null) {
+        child = next;
+      } else if (!wrapped) {
+        wrapped = true;
+        child = firstChild;
+      } else {
+        child = null;
+      }
+
+      if (wrapped && identical(child, startChild)) {
+        break;
+      }
     }
 
-    // Cache and return
-    _aspectRatioCache[index] = currentRatio;
-    return currentRatio;
+    _aspectProbeCursor = child ?? firstChild;
   }
 
   void _scheduleUpdate(int index) {
@@ -273,10 +496,18 @@ class RenderSliverDynamicFlexbox extends RenderSliverMultiBoxAdaptor
   void _applyUpdates() {
     if (_pendingUpdates.isEmpty) return;
 
+    bool cacheChanged = false;
     for (final index in _pendingUpdates) {
-      _aspectRatioCache.remove(index);
+      cacheChanged = _removeCachedAspectRatio(index) || cacheChanged;
+      _lastAspectCheckLayoutPass.remove(index);
     }
     _pendingUpdates.clear();
+    _debounceTimer = null;
+
+    if (cacheChanged) {
+      _aspectRatioRevision++;
+      _invalidateRowCache();
+    }
 
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (attached) markNeedsLayout();
@@ -287,14 +518,20 @@ class RenderSliverDynamicFlexbox extends RenderSliverMultiBoxAdaptor
   void performLayout() {
     childManager.didStartLayout();
     childManager.setDidUnderflow(false);
+    _layoutPass++;
+    _remainingAspectChecks = _flexboxDelegate.maxAspectRatioChecksPerLayout;
 
     final crossAxisExtent = constraints.crossAxisExtent;
 
-    // Clear cache when crossAxisExtent changes significantly
+    // Row layout depends on available cross-axis extent, so width changes
+    // invalidate row cache. Keep aspect-ratio cache to avoid expensive
+    // backfilling of leading children during resize.
     if (_lastCrossAxisExtent != null &&
         (_lastCrossAxisExtent! - crossAxisExtent).abs() >
             _flexboxDelegate.crossAxisExtentChangeThreshold) {
-      _aspectRatioCache.clear();
+      _invalidateRowCache();
+      _lastAspectCheckLayoutPass.clear();
+      _aspectProbeCursor = firstChild;
     }
     _lastCrossAxisExtent = crossAxisExtent;
 
@@ -339,60 +576,116 @@ class RenderSliverDynamicFlexbox extends RenderSliverMultiBoxAdaptor
       }
     }
 
-    while (indexOf(firstChild!) > 0) {
-      final newChild = insertAndLayoutLeadingChild(
-        measureConstraints,
-        parentUsesSize: true,
-      );
-      if (newChild == null) break;
-    }
-
-    while (true) {
-      final lastIndex = indexOf(lastChild!);
-      final rows = _buildRowsUpTo(lastIndex, crossAxisExtent);
-
-      if (rows.isEmpty) break;
-
-      final currentEndOffset = rows.last.trailingOffset;
-      if (currentEndOffset >= targetEndScrollOffset) break;
-
-      final newChild = insertAndLayoutChild(
-        measureConstraints,
-        after: lastChild,
-        parentUsesSize: true,
-      );
-      if (newChild == null) {
-        reachedEnd = true;
-        break;
+    final firstIndex = indexOf(firstChild!);
+    if (!_canBuildRowsFromIndex(firstIndex - 1)) {
+      while (indexOf(firstChild!) > 0) {
+        final newChild = insertAndLayoutLeadingChild(
+          measureConstraints,
+          parentUsesSize: true,
+        );
+        if (newChild == null) break;
       }
     }
 
-    final lastIndex = indexOf(lastChild!);
-    final allRows = _buildRowsUpTo(lastIndex, crossAxisExtent);
+    const int kInsertBatchSize = 24;
+    List<_RowLayout> rowsForCurrentLast = const <_RowLayout>[];
+    int rowsForCurrentLastIndex = -1;
+    while (true) {
+      final currentLastIndex = indexOf(lastChild!);
+      final rows = _buildRowsUpTo(currentLastIndex, crossAxisExtent);
+      rowsForCurrentLast = rows;
+      rowsForCurrentLastIndex = currentLastIndex;
 
-    final layoutMap = <int, _ChildLayout>{};
-    final rowMap = <int, _RowLayout>{};
-    for (final row in allRows) {
-      for (final layout in row.childLayouts) {
-        layoutMap[layout.index] = layout;
-        rowMap[layout.index] = row;
+      if (rows.isEmpty) break;
+      if (rows.last.trailingOffset >= targetEndScrollOffset) break;
+
+      bool insertedAny = false;
+      for (int i = 0; i < kInsertBatchSize; i++) {
+        final newChild = insertAndLayoutChild(
+          measureConstraints,
+          after: lastChild,
+          parentUsesSize: true,
+        );
+        if (newChild == null) {
+          reachedEnd = true;
+          break;
+        }
+        insertedAny = true;
+      }
+
+      if (!insertedAny || reachedEnd) break;
+    }
+
+    final finalLastIndex = indexOf(lastChild!);
+    final allRows = rowsForCurrentLastIndex == finalLastIndex
+        ? rowsForCurrentLast
+        : _buildRowsUpTo(finalLastIndex, crossAxisExtent);
+
+    // When scrolling backward, previously collected leading children may leave
+    // firstChild entirely below the current viewport, which causes paintExtent
+    // to drop to zero (white frame). Re-attach enough leading children so that
+    // first attached row starts at or before the requested scroll offset.
+    if (_canBuildRowsFromIndex(finalLastIndex) && allRows.isNotEmpty) {
+      final targetFirstRowIndex =
+          _findFirstRowIndexForScrollOffset(allRows, scrollOffset);
+      final targetFirstIndex = allRows[targetFirstRowIndex].firstIndex;
+      while (firstChild != null) {
+        final currentFirstIndex = indexOf(firstChild!);
+        if (currentFirstIndex <= 0 || currentFirstIndex <= targetFirstIndex) {
+          break;
+        }
+        final insertedLeadingChild = insertAndLayoutLeadingChild(
+          measureConstraints,
+          parentUsesSize: true,
+        );
+        if (insertedLeadingChild == null) {
+          break;
+        }
       }
     }
 
     RenderBox? child = firstChild;
-    while (child != null) {
+    int rowCursor = 0;
+    int itemCursor = 0;
+    while (child != null && rowCursor < allRows.length) {
       final parentData = child.parentData as SliverDynamicFlexboxParentData;
       final index = parentData.index!;
 
-      final layout = layoutMap[index];
-      final row = rowMap[index];
+      while (
+          rowCursor < allRows.length && allRows[rowCursor].lastIndex < index) {
+        rowCursor++;
+        itemCursor = 0;
+      }
+      if (rowCursor >= allRows.length) break;
 
-      if (layout != null && row != null) {
-        parentData.layoutOffset = row.scrollOffset;
-        parentData.crossAxisOffset = layout.crossAxisOffset;
+      final row = allRows[rowCursor];
+      final rowLayouts = row.childLayouts;
+      while (itemCursor < rowLayouts.length &&
+          rowLayouts[itemCursor].index < index) {
+        itemCursor++;
+      }
 
+      _ChildLayoutWithRow? resolvedLayout;
+      if (itemCursor < rowLayouts.length &&
+          rowLayouts[itemCursor].index == index) {
+        resolvedLayout = _ChildLayoutWithRow(
+          row: row,
+          layout: rowLayouts[itemCursor],
+        );
+      } else {
+        resolvedLayout = _findChildLayout(allRows, index);
+      }
+
+      if (resolvedLayout != null) {
+        parentData.layoutOffset = resolvedLayout.row.scrollOffset;
+        parentData.crossAxisOffset = resolvedLayout.layout.crossAxisOffset;
         child.layout(
-          BoxConstraints.tight(Size(layout.width, layout.height)),
+          BoxConstraints.tight(
+            Size(
+              resolvedLayout.layout.width,
+              resolvedLayout.layout.height,
+            ),
+          ),
           parentUsesSize: true,
         );
       }
@@ -423,6 +716,23 @@ class RenderSliverDynamicFlexbox extends RenderSliverMultiBoxAdaptor
       child = childBefore(child);
     }
 
+    int attachedChildCount = 0;
+    for (RenderBox? attached = firstChild;
+        attached != null;
+        attached = childAfter(attached)) {
+      attachedChildCount++;
+    }
+    // Never garbage collect every attached child in one pass. Doing so can
+    // produce transient empty geometry (white flash) and scroll jump.
+    if (attachedChildCount > 0 &&
+        leadingGarbage + trailingGarbage >= attachedChildCount) {
+      if (leadingGarbage >= trailingGarbage) {
+        leadingGarbage = math.max(0, attachedChildCount - trailingGarbage - 1);
+      } else {
+        trailingGarbage = math.max(0, attachedChildCount - leadingGarbage - 1);
+      }
+    }
+
     collectGarbage(leadingGarbage, trailingGarbage);
     callCollectGarbage(
       collectGarbage: _flexboxDelegate.collectGarbage,
@@ -436,7 +746,17 @@ class RenderSliverDynamicFlexbox extends RenderSliverMultiBoxAdaptor
       return;
     }
 
-    final endScrollOffset = allRows.isEmpty ? 0.0 : allRows.last.trailingOffset;
+    // Probe after child list stabilizes for this layout pass so scrolling
+    // does not keep probing children that are about to be detached.
+    _probeAspectRatioChanges();
+
+    final postGarbageLastIndex = indexOf(lastChild!);
+    final rowsForGeometry = postGarbageLastIndex == finalLastIndex
+        ? allRows
+        : _buildRowsUpTo(postGarbageLastIndex, crossAxisExtent);
+    final endScrollOffset = rowsForGeometry.isNotEmpty
+        ? rowsForGeometry.last.trailingOffset
+        : (_getLayoutOffset(lastChild!) ?? 0.0) + paintExtentOf(lastChild!);
 
     double estimatedMaxScrollOffset;
     if (reachedEnd) {
@@ -500,13 +820,131 @@ class RenderSliverDynamicFlexbox extends RenderSliverMultiBoxAdaptor
   }
 
   List<_RowLayout> _buildRowsUpTo(int maxIndex, double crossAxisExtent) {
+    if (maxIndex < 0 || firstChild == null) {
+      return const <_RowLayout>[];
+    }
+
+    final firstAttachedIndex = indexOf(firstChild!);
+    final canBuildByIndex = _canBuildRowsFromIndex(maxIndex);
+    // aspectRatioGetter values can change without callback identity changes.
+    // Rebuilding rows in getter mode avoids stale-cache mismatches.
+    // But we still allow reuse within the same layout pass to avoid repeated
+    // rebuilding during a single performLayout.
+    final canReuseRowCache = _flexboxDelegate.aspectRatioGetter == null ||
+        _rowCacheLayoutPass == _layoutPass;
+    final hasValidCacheBase = canReuseRowCache &&
+        _rowCache != null &&
+        _rowCacheAspectRevision == _aspectRatioRevision &&
+        _rowCacheCrossAxisExtent != null &&
+        (_rowCacheCrossAxisExtent! - crossAxisExtent).abs() < 0.001;
+
+    if (hasValidCacheBase && _rowCacheMaxIndex == maxIndex) {
+      if (_rowCacheBuiltByIndex ||
+          _rowCacheFirstAttachedIndex == firstAttachedIndex) {
+        return _rowCache!;
+      }
+    }
+
+    if (hasValidCacheBase &&
+        canBuildByIndex &&
+        _rowCacheBuiltByIndex &&
+        _rowCacheMaxIndex != null &&
+        _rowCacheMaxIndex! < maxIndex) {
+      final rows = _extendRowsByIndex(
+        previousRows: _rowCache!,
+        maxIndex: maxIndex,
+        crossAxisExtent: crossAxisExtent,
+      );
+      _rowCache = rows;
+      _rowCacheMaxIndex = maxIndex;
+      _rowCacheCrossAxisExtent = crossAxisExtent;
+      _rowCacheAspectRevision = _aspectRatioRevision;
+      _rowCacheLayoutPass = _layoutPass;
+      _rowCacheBuiltByIndex = true;
+      _rowCacheFirstAttachedIndex = null;
+      return rows;
+    }
+
+    final rows = canBuildByIndex
+        ? _buildRowsByIndex(maxIndex, crossAxisExtent)
+        : _buildRowsByAttachedChildren(maxIndex, crossAxisExtent);
+
+    _rowCache = rows;
+    _rowCacheMaxIndex = maxIndex;
+    _rowCacheCrossAxisExtent = crossAxisExtent;
+    _rowCacheAspectRevision = _aspectRatioRevision;
+    _rowCacheLayoutPass = _layoutPass;
+    _rowCacheBuiltByIndex = canBuildByIndex;
+    _rowCacheFirstAttachedIndex = canBuildByIndex ? null : firstAttachedIndex;
+
+    return rows;
+  }
+
+  List<_RowLayout> _extendRowsByIndex({
+    required List<_RowLayout> previousRows,
+    required int maxIndex,
+    required double crossAxisExtent,
+  }) {
+    if (previousRows.isEmpty) {
+      return _buildRowsByIndex(maxIndex, crossAxisExtent);
+    }
+
+    final mainAxisSpacing = _flexboxDelegate.mainAxisSpacing;
+    final preservedCount =
+        previousRows.length > 1 ? previousRows.length - 1 : 0;
+    final rows = <_RowLayout>[];
+    if (preservedCount > 0) {
+      rows.addAll(previousRows.getRange(0, preservedCount));
+    }
+
+    final droppedTailRow = previousRows[preservedCount];
+    final startIndex = droppedTailRow.firstIndex;
+    final startScrollOffset =
+        rows.isEmpty ? 0.0 : rows.last.trailingOffset + mainAxisSpacing;
+    rows.addAll(
+      _buildRowsByIndexRange(
+        startIndex: startIndex,
+        maxIndex: maxIndex,
+        crossAxisExtent: crossAxisExtent,
+        startScrollOffset: startScrollOffset,
+      ),
+    );
+    return rows;
+  }
+
+  List<_RowLayout> _buildRowsByAttachedChildren(
+    int maxIndex,
+    double crossAxisExtent,
+  ) {
     final rows = <_RowLayout>[];
     final targetHeight = _flexboxDelegate.targetRowHeight;
     final crossAxisSpacing = _flexboxDelegate.crossAxisSpacing;
     final mainAxisSpacing = _flexboxDelegate.mainAxisSpacing;
     final minFillFactor = _flexboxDelegate.minRowFillFactor;
 
-    final children = <_ChildData>[];
+    final currentRowChildren = <_ChildData>[];
+    double currentRowBaseWidth = 0.0;
+    double currentScrollOffset =
+        firstChild != null ? (_getLayoutOffset(firstChild!) ?? 0.0) : 0.0;
+
+    void flushCurrentRow({required bool isLastRow}) {
+      if (currentRowChildren.isEmpty) return;
+      final row = _buildRowLayout(
+        items: currentRowChildren,
+        totalBaseWidth: currentRowBaseWidth,
+        scrollOffset: currentScrollOffset,
+        targetHeight: targetHeight,
+        crossAxisExtent: crossAxisExtent,
+        crossAxisSpacing: crossAxisSpacing,
+        minFillFactor: minFillFactor,
+        isLastRow: isLastRow,
+      );
+      rows.add(row);
+      currentScrollOffset = row.trailingOffset + mainAxisSpacing;
+      currentRowChildren.clear();
+      currentRowBaseWidth = 0.0;
+    }
+
     RenderBox? child = firstChild;
     while (child != null) {
       final parentData = child.parentData as SliverDynamicFlexboxParentData;
@@ -514,114 +952,247 @@ class RenderSliverDynamicFlexbox extends RenderSliverMultiBoxAdaptor
       if (index > maxIndex) break;
 
       final aspectRatio = _getAspectRatio(index, child);
-      children.add(_ChildData(index: index, aspectRatio: aspectRatio));
+      final baseWidth = targetHeight * aspectRatio;
+
+      final projectedBaseWidth = currentRowBaseWidth + baseWidth;
+      final projectedItemCount = currentRowChildren.length + 1;
+      final projectedSpacing = crossAxisSpacing * (projectedItemCount - 1);
+      final projectedWidth = projectedBaseWidth + projectedSpacing;
+
+      if (currentRowChildren.isNotEmpty && projectedWidth > crossAxisExtent) {
+        flushCurrentRow(isLastRow: false);
+      }
+
+      currentRowChildren.add(
+        _ChildData(
+          index: index,
+          baseWidth: baseWidth,
+        ),
+      );
+      currentRowBaseWidth += baseWidth;
+
       child = childAfter(child);
     }
 
-    if (children.isEmpty) return rows;
-
-    var currentRowChildren = <_ChildData>[];
-    double currentScrollOffset = 0.0;
-
-    double getTotalBaseWidth(List<_ChildData> items) {
-      return items.fold<double>(
-        0.0,
-        (sum, c) => sum + targetHeight * c.aspectRatio,
-      );
-    }
-
-    double getTotalSpacing(List<_ChildData> items) {
-      return items.isEmpty ? 0.0 : crossAxisSpacing * (items.length - 1);
-    }
-
-    bool canFit(List<_ChildData> items, _ChildData newItem) {
-      if (items.isEmpty) return true;
-      final currentWidth = getTotalBaseWidth(items) + getTotalSpacing(items);
-      final newWidth = targetHeight * newItem.aspectRatio;
-      return currentWidth + crossAxisSpacing + newWidth <= crossAxisExtent;
-    }
-
-    _RowLayout buildRow(
-      List<_ChildData> items,
-      double scrollOffset,
-      bool isLast,
-    ) {
-      final totalSpacing = getTotalSpacing(items);
-      final availableWidth = crossAxisExtent - totalSpacing;
-      final totalBaseWidth = getTotalBaseWidth(items);
-      final fillFactor = totalBaseWidth / availableWidth;
-
-      double scaleFactor;
-      double height;
-
-      if (isLast && fillFactor < minFillFactor) {
-        scaleFactor = 1.0;
-        height = targetHeight;
-      } else {
-        scaleFactor = availableWidth / totalBaseWidth;
-        height = targetHeight * scaleFactor;
-      }
-
-      final childLayouts = <_ChildLayout>[];
-      double offset = 0.0;
-
-      for (final item in items) {
-        final baseWidth = targetHeight * item.aspectRatio;
-        final width = baseWidth * scaleFactor;
-        childLayouts.add(
-          _ChildLayout(
-            index: item.index,
-            crossAxisOffset: offset,
-            width: width,
-            height: height,
-          ),
-        );
-        offset += width + crossAxisSpacing;
-      }
-
-      return _RowLayout(
-        scrollOffset: scrollOffset,
-        height: height,
-        childLayouts: childLayouts,
-      );
-    }
-
-    for (int i = 0; i < children.length; i++) {
-      final child = children[i];
-      final isLast = i == children.length - 1;
-
-      if (!canFit(currentRowChildren, child)) {
-        if (currentRowChildren.isNotEmpty) {
-          rows.add(buildRow(currentRowChildren, currentScrollOffset, false));
-          currentScrollOffset = rows.last.trailingOffset + mainAxisSpacing;
-        }
-        currentRowChildren = [];
-      }
-
-      currentRowChildren.add(child);
-
-      if (isLast && currentRowChildren.isNotEmpty) {
-        rows.add(buildRow(currentRowChildren, currentScrollOffset, true));
-      }
-    }
+    flushCurrentRow(isLastRow: true);
 
     return rows;
+  }
+
+  List<_RowLayout> _buildRowsByIndex(int maxIndex, double crossAxisExtent) {
+    return _buildRowsByIndexRange(
+      startIndex: 0,
+      maxIndex: maxIndex,
+      crossAxisExtent: crossAxisExtent,
+      startScrollOffset: 0.0,
+    );
+  }
+
+  List<_RowLayout> _buildRowsByIndexRange({
+    required int startIndex,
+    required int maxIndex,
+    required double crossAxisExtent,
+    required double startScrollOffset,
+  }) {
+    if (startIndex > maxIndex) {
+      return const <_RowLayout>[];
+    }
+
+    final rows = <_RowLayout>[];
+    final targetHeight = _flexboxDelegate.targetRowHeight;
+    final crossAxisSpacing = _flexboxDelegate.crossAxisSpacing;
+    final mainAxisSpacing = _flexboxDelegate.mainAxisSpacing;
+    final minFillFactor = _flexboxDelegate.minRowFillFactor;
+
+    final currentRowChildren = <_ChildData>[];
+    double currentRowBaseWidth = 0.0;
+    double currentScrollOffset = startScrollOffset;
+
+    void flushCurrentRow({required bool isLastRow}) {
+      if (currentRowChildren.isEmpty) return;
+      final row = _buildRowLayout(
+        items: currentRowChildren,
+        totalBaseWidth: currentRowBaseWidth,
+        scrollOffset: currentScrollOffset,
+        targetHeight: targetHeight,
+        crossAxisExtent: crossAxisExtent,
+        crossAxisSpacing: crossAxisSpacing,
+        minFillFactor: minFillFactor,
+        isLastRow: isLastRow,
+      );
+      rows.add(row);
+      currentScrollOffset = row.trailingOffset + mainAxisSpacing;
+      currentRowChildren.clear();
+      currentRowBaseWidth = 0.0;
+    }
+
+    for (int index = startIndex; index <= maxIndex; index++) {
+      final aspectRatio = _getAspectRatioForIndex(index);
+      final baseWidth = targetHeight * aspectRatio;
+
+      final projectedBaseWidth = currentRowBaseWidth + baseWidth;
+      final projectedItemCount = currentRowChildren.length + 1;
+      final projectedSpacing = crossAxisSpacing * (projectedItemCount - 1);
+      final projectedWidth = projectedBaseWidth + projectedSpacing;
+
+      if (currentRowChildren.isNotEmpty && projectedWidth > crossAxisExtent) {
+        flushCurrentRow(isLastRow: false);
+      }
+
+      currentRowChildren.add(
+        _ChildData(
+          index: index,
+          baseWidth: baseWidth,
+        ),
+      );
+      currentRowBaseWidth += baseWidth;
+    }
+
+    flushCurrentRow(isLastRow: true);
+
+    return rows;
+  }
+
+  _RowLayout _buildRowLayout({
+    required List<_ChildData> items,
+    required double totalBaseWidth,
+    required double scrollOffset,
+    required double targetHeight,
+    required double crossAxisExtent,
+    required double crossAxisSpacing,
+    required double minFillFactor,
+    required bool isLastRow,
+  }) {
+    final totalSpacing = crossAxisSpacing * (items.length - 1);
+    final availableWidth = crossAxisExtent - totalSpacing;
+    final safeBaseWidth = totalBaseWidth > 0 ? totalBaseWidth : 1.0;
+    final fillFactor =
+        availableWidth > 0 ? safeBaseWidth / availableWidth : double.infinity;
+
+    double scaleFactor = 1.0;
+    if (availableWidth > 0) {
+      if (isLastRow && fillFactor < minFillFactor) {
+        scaleFactor = 1.0;
+      } else {
+        scaleFactor = availableWidth / safeBaseWidth;
+      }
+    }
+    if (!scaleFactor.isFinite || scaleFactor <= 0) {
+      scaleFactor = 1.0;
+    }
+
+    final rowHeight = targetHeight * scaleFactor;
+    final childLayouts = <_ChildLayout>[];
+    double crossOffset = 0.0;
+
+    for (int i = 0; i < items.length; i++) {
+      final item = items[i];
+      final width = item.baseWidth * scaleFactor;
+      childLayouts.add(
+        _ChildLayout(
+          index: item.index,
+          crossAxisOffset: crossOffset,
+          width: width,
+          height: rowHeight,
+        ),
+      );
+      crossOffset += width;
+      if (i < items.length - 1) {
+        crossOffset += crossAxisSpacing;
+      }
+    }
+
+    return _RowLayout(
+      firstIndex: items.first.index,
+      lastIndex: items.last.index,
+      scrollOffset: scrollOffset,
+      height: rowHeight,
+      childLayouts: childLayouts,
+    );
+  }
+
+  _ChildLayoutWithRow? _findChildLayout(List<_RowLayout> rows, int index) {
+    if (rows.isEmpty) return null;
+
+    int low = 0;
+    int high = rows.length - 1;
+    int rowIndex = -1;
+    while (low <= high) {
+      final mid = (low + high) >> 1;
+      final row = rows[mid];
+      if (index < row.firstIndex) {
+        high = mid - 1;
+      } else if (index > row.lastIndex) {
+        low = mid + 1;
+      } else {
+        rowIndex = mid;
+        break;
+      }
+    }
+    if (rowIndex < 0) return null;
+
+    final row = rows[rowIndex];
+    final layouts = row.childLayouts;
+    int itemLow = 0;
+    int itemHigh = layouts.length - 1;
+    while (itemLow <= itemHigh) {
+      final mid = (itemLow + itemHigh) >> 1;
+      final layout = layouts[mid];
+      if (index < layout.index) {
+        itemHigh = mid - 1;
+      } else if (index > layout.index) {
+        itemLow = mid + 1;
+      } else {
+        return _ChildLayoutWithRow(row: row, layout: layout);
+      }
+    }
+
+    return null;
+  }
+
+  int _findFirstRowIndexForScrollOffset(
+    List<_RowLayout> rows,
+    double scrollOffset,
+  ) {
+    if (rows.isEmpty || scrollOffset <= 0.0) {
+      return 0;
+    }
+    int low = 0;
+    int high = rows.length - 1;
+    int result = rows.length - 1;
+    while (low <= high) {
+      final mid = (low + high) >> 1;
+      if (rows[mid].trailingOffset > scrollOffset) {
+        result = mid;
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return result;
   }
 }
 
 class _ChildData {
-  _ChildData({required this.index, required this.aspectRatio});
+  _ChildData({
+    required this.index,
+    required this.baseWidth,
+  });
   final int index;
-  final double aspectRatio;
+  final double baseWidth;
 }
 
 class _RowLayout {
   _RowLayout({
+    required this.firstIndex,
+    required this.lastIndex,
     required this.scrollOffset,
     required this.height,
     required this.childLayouts,
   });
 
+  final int firstIndex;
+  final int lastIndex;
   final double scrollOffset;
   final double height;
   final List<_ChildLayout> childLayouts;
@@ -641,6 +1212,16 @@ class _ChildLayout {
   final double crossAxisOffset;
   final double width;
   final double height;
+}
+
+class _ChildLayoutWithRow {
+  const _ChildLayoutWithRow({
+    required this.row,
+    required this.layout,
+  });
+
+  final _RowLayout row;
+  final _ChildLayout layout;
 }
 
 /// A widget that wraps children for use in [SliverDynamicFlexbox].
