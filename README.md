@@ -33,6 +33,7 @@ Try out the interactive demo: **[https://fluttercandies.github.io/flexbox_layout
 - **FlexboxList**: A convenience widget similar to `GridView` but with flexbox layout capabilities.
 - **DynamicFlexbox**: Dynamic flexbox layout that automatically adjusts item sizes based on aspect ratios.
 - **DimensionResolver**: Utilities for asynchronously resolving dimensions (e.g., image sizes).
+- **Item Entrance Animation**: Built-in staggered entrance animation helpers for list/sliver item builders.
 
 ## Installation
 
@@ -220,7 +221,7 @@ SliverDynamicFlexbox(
 
 ```dart
 class _ScalableGalleryState extends State<_ScalableGallery>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final controller = FlexboxScaleController(
     initialExtent: 150.0,
     minExtent: 80.0,

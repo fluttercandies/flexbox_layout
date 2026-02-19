@@ -33,6 +33,7 @@
 - **FlexboxList**：类似 `GridView` 的便捷组件，但具有 flexbox 布局功能。
 - **DynamicFlexbox**：动态 flexbox 布局，根据纵横比自动调整项目大小。
 - **DimensionResolver**：用于异步解析尺寸（如图片尺寸）的工具。
+- **项目入场动画**：内置用于 list/sliver builder 的错峰入场动画辅助能力。
 
 ## 安装
 
@@ -220,7 +221,7 @@ SliverDynamicFlexbox(
 
 ```dart
 class _ScalableGalleryState extends State<_ScalableGallery>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final controller = FlexboxScaleController(
     initialExtent: 150.0,
     minExtent: 80.0,

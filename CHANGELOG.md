@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-02-18
+
+### Added
+- `FlexboxItemAnimationController` with auto/manual animation modes
+- `FlexboxItemAnimationConfig` and `withFlexboxItemAnimation` for staggered
+  entrance transitions in sliver/list builders
+- `FlexboxScaleController.extentListenable` for extent-only UI subscriptions
+- `maxAspectRatioChecksPerLayout` and `aspectRatioCheckInterval` options in
+  dynamic flexbox delegates
+
+### Changed
+- Optimized sliver and render flexbox layout paths with delegate/layout caching
+- Improved dynamic aspect-ratio probing and relayout behavior for scrolling
+  feeds
+- Updated scalable flexbox rebuilding from full controller listening to
+  extent-only listening
+- Fixed max-lines behavior and defensive layout math in flexbox delegates
+- Updated and expanded test coverage for dynamic, sliver, scale-controller,
+  and item-animation behavior
+
 ## [1.1.1] - 2026-01-17
 
 ### Changed
