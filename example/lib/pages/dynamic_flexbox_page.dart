@@ -13,12 +13,9 @@ import '../widgets/neo_widgets.dart';
 
 /// Dynamic flexbox gallery using [SliverDynamicFlexbox].
 ///
-/// This page demonstrates true dynamic size measurement where:
-/// - Child widgets do NOT pre-specify their aspect ratio
-/// - The layout system measures children to determine their intrinsic sizes
-/// - When images load and their real dimensions become known, layout updates
-///
-/// This is different from providing pre-calculated aspect ratios from API.
+/// For production stability, this page uses source-provided aspect ratios as
+/// the primary layout signal, which avoids square placeholders and post-load
+/// relayout rollback during pagination.
 class DynamicFlexboxPage extends StatefulWidget {
   const DynamicFlexboxPage({super.key});
 
@@ -31,6 +28,7 @@ class _DynamicFlexboxPageState extends State<DynamicFlexboxPage>
   final List<ImagePost> _posts = [];
   bool _isLoading = false;
   bool _hasMore = true;
+  Future<void>? _activeLoadTask;
   int _currentPage = 1;
   String? _error;
 
@@ -39,7 +37,7 @@ class _DynamicFlexboxPageState extends State<DynamicFlexboxPage>
 
   late final EasyRefreshController _refreshController;
 
-  double _targetRowHeight = 200.0;
+  double _targetRowHeight = 160.0;
   double _mainAxisSpacing = 4.0;
   double _crossAxisSpacing = 4.0;
   final int _postsPerPage = 20;
@@ -61,45 +59,59 @@ class _DynamicFlexboxPageState extends State<DynamicFlexboxPage>
   }
 
   Future<void> _loadPosts({bool isRefresh = false}) async {
-    if (_isLoading) return;
+    if (_isLoading) {
+      await (_activeLoadTask ?? Future<void>.value());
+      return;
+    }
     if (!isRefresh && !_hasMore) return;
 
-    setSafeState(() {
-      _isLoading = true;
-      _error = null;
-    });
+    final task = () async {
+      setSafeState(() {
+        _isLoading = true;
+        _error = null;
+      });
 
-    try {
-      final page = isRefresh ? 1 : _currentPage;
-      final source = ImageSourceFactory.create(ImageConfig.currentSource);
-      final newPosts = await source.fetchPosts(
-        page: page,
-        limit: _postsPerPage,
-      );
+      try {
+        final page = isRefresh ? 1 : _currentPage;
+        final source = ImageSourceFactory.create(ImageConfig.currentSource);
+        final newPosts = await source.fetchPosts(
+          page: page,
+          limit: _postsPerPage,
+        );
 
-      if (newPosts.isEmpty) {
+        if (newPosts.isEmpty) {
+          setSafeState(() {
+            _hasMore = false;
+            _isLoading = false;
+          });
+          return;
+        }
+
         setSafeState(() {
-          _hasMore = false;
+          if (isRefresh) {
+            _posts.clear();
+            _currentPage = 1;
+            _hasMore = true;
+          }
+          _posts.addAll(newPosts);
+          _currentPage++;
           _isLoading = false;
         });
-        return;
+      } catch (e) {
+        setSafeState(() {
+          _error = 'Load error: $e';
+          _isLoading = false;
+        });
       }
+    }();
 
-      setSafeState(() {
-        if (isRefresh) {
-          _posts.clear();
-          _currentPage = 1;
-          _hasMore = true;
-        }
-        _posts.addAll(newPosts);
-        _currentPage++;
-        _isLoading = false;
-      });
-    } catch (e) {
-      setSafeState(() {
-        _error = 'Load error: $e';
-        _isLoading = false;
-      });
+    _activeLoadTask = task;
+    try {
+      await task;
+    } finally {
+      if (identical(_activeLoadTask, task)) {
+        _activeLoadTask = null;
+      }
     }
   }
 
@@ -110,10 +122,35 @@ class _DynamicFlexboxPageState extends State<DynamicFlexboxPage>
   }
 
   Future<void> _onLoad() async {
+    final previousCount = _posts.length;
     await _loadPosts();
+    if (!_hasMore) {
+      _refreshController.finishLoad(IndicatorResult.noMore);
+      return;
+    }
+
+    final hasNewItems = _posts.length > previousCount;
     _refreshController.finishLoad(
-      _hasMore ? IndicatorResult.success : IndicatorResult.noMore,
+      hasNewItems ? IndicatorResult.success : IndicatorResult.fail,
     );
+    if (hasNewItems) {
+      _scheduleAutoLoadIfStillNearBottom();
+    }
+  }
+
+  void _scheduleAutoLoadIfStillNearBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_hasMore || _isLoading) return;
+
+      final footerState = _refreshController.footerState;
+      if (footerState == null) return;
+
+      final threshold = footerState.notifier.infiniteOffset;
+      if (threshold == null) return;
+      if (footerState.notifier.edgeOffset > threshold) return;
+
+      _refreshController.callLoad(force: true, overOffset: 0);
+    });
   }
 
   @override
@@ -324,8 +361,7 @@ class _DynamicFlexboxPageState extends State<DynamicFlexboxPage>
       );
     }
 
-    // Simply use SliverDynamicFlexbox with Image.network
-    // The layout automatically measures intrinsic sizes!
+    // Use source aspect ratios to keep layout stable while loading.
     return EasyRefresh(
       controller: _refreshController,
       onRefresh: _onRefresh,
@@ -347,7 +383,7 @@ class _DynamicFlexboxPageState extends State<DynamicFlexboxPage>
               mainAxisSpacing: _mainAxisSpacing,
               crossAxisSpacing: _crossAxisSpacing,
               // Debounce duration for batched updates when images load
-              debounceDuration: const Duration(milliseconds: 300),
+              debounceDuration: const Duration(milliseconds: 150),
               aspectRatioChangeThreshold: 0.05,
               crossAxisExtentChangeThreshold: 4,
             ),
@@ -367,7 +403,7 @@ class _DynamicFlexboxPageState extends State<DynamicFlexboxPage>
       targetRowHeight: _targetRowHeight,
       mainAxisSpacing: _mainAxisSpacing,
       crossAxisSpacing: _crossAxisSpacing,
-      debounceDuration: const Duration(milliseconds: 300),
+      debounceDuration: const Duration(milliseconds: 150),
       aspectRatioChangeThreshold: 0.08,
       crossAxisExtentChangeThreshold: 8,
       padding: const EdgeInsets.all(4),
@@ -471,8 +507,7 @@ class _DynamicFlexboxPageState extends State<DynamicFlexboxPage>
   }
 }
 
-/// A simple image item - just uses Image.network directly.
-/// The layout measures its intrinsic size automatically!
+/// A simple image item.
 class _ImageItem extends StatelessWidget {
   const _ImageItem({super.key, required this.post});
 
@@ -480,7 +515,6 @@ class _ImageItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Use DynamicFlexItem to handle unbounded constraints during measurement
     return DecoratedBox(
       decoration: BoxDecoration(color: NeoBrutalism.white),
       child: Image(
@@ -493,24 +527,6 @@ class _ImageItem extends StatelessWidget {
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeOut,
             child: child,
-          );
-        },
-        loadingBuilder: (context, child, loadingProgress) {
-          if (loadingProgress == null) return child;
-          final progress = loadingProgress.expectedTotalBytes != null
-              ? loadingProgress.cumulativeBytesLoaded /
-                    loadingProgress.expectedTotalBytes!
-              : null;
-          return Center(
-            child: SizedBox(
-              width: 32,
-              height: 32,
-              child: CircularProgressIndicator(
-                strokeWidth: 2.5,
-                value: progress,
-                color: NeoBrutalism.green,
-              ),
-            ),
           );
         },
         errorBuilder: (context, error, stackTrace) {

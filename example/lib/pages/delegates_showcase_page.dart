@@ -199,6 +199,8 @@ class _FixedCrossAxisCountDemo extends StatefulWidget {
 }
 
 class _FixedCrossAxisCountDemoState extends State<_FixedCrossAxisCountDemo> {
+  final FlexboxItemAnimationController _itemAnimationController =
+      FlexboxItemAnimationController.auto();
   int _crossAxisCount = 3;
   double _childAspectRatio = 1.0;
 
@@ -239,7 +241,10 @@ class _FixedCrossAxisCountDemoState extends State<_FixedCrossAxisCountDemo> {
                 padding: const EdgeInsets.all(12),
                 sliver: SliverFlexbox(
                   delegate: SliverChildBuilderDelegate(
-                    (context, index) => _NeoTile(index: index),
+                    withFlexboxItemAnimation(
+                      itemBuilder: (context, index) => _NeoTile(index: index),
+                      controller: _itemAnimationController,
+                    ),
                     childCount: 50,
                   ),
                   flexboxDelegate: SliverFlexboxDelegateWithFixedCrossAxisCount(
@@ -269,6 +274,8 @@ class _MaxCrossAxisExtentDemo extends StatefulWidget {
 }
 
 class _MaxCrossAxisExtentDemoState extends State<_MaxCrossAxisExtentDemo> {
+  final FlexboxItemAnimationController _itemAnimationController =
+      FlexboxItemAnimationController.auto();
   double _maxCrossAxisExtent = 150.0;
 
   @override
@@ -296,7 +303,10 @@ class _MaxCrossAxisExtentDemoState extends State<_MaxCrossAxisExtentDemo> {
                 padding: const EdgeInsets.all(12),
                 sliver: SliverFlexbox(
                   delegate: SliverChildBuilderDelegate(
-                    (context, index) => _NeoTile(index: index),
+                    withFlexboxItemAnimation(
+                      itemBuilder: (context, index) => _NeoTile(index: index),
+                      controller: _itemAnimationController,
+                    ),
                     childCount: 50,
                   ),
                   flexboxDelegate: SliverFlexboxDelegateWithMaxCrossAxisExtent(
@@ -325,6 +335,8 @@ class _AspectRatiosDemo extends StatefulWidget {
 }
 
 class _AspectRatiosDemoState extends State<_AspectRatiosDemo> {
+  final FlexboxItemAnimationController _itemAnimationController =
+      FlexboxItemAnimationController.auto();
   double _targetRowHeight = 150.0;
   final List<double> _aspectRatios = List.generate(
     100,
@@ -356,9 +368,12 @@ class _AspectRatiosDemoState extends State<_AspectRatiosDemo> {
                 padding: const EdgeInsets.all(8),
                 sliver: SliverFlexbox(
                   delegate: SliverChildBuilderDelegate(
-                    (context, index) => _NeoAspectTile(
-                      index: index,
-                      aspectRatio: _aspectRatios[index],
+                    withFlexboxItemAnimation(
+                      itemBuilder: (context, index) => _NeoAspectTile(
+                        index: index,
+                        aspectRatio: _aspectRatios[index],
+                      ),
+                      controller: _itemAnimationController,
                     ),
                     childCount: _aspectRatios.length,
                   ),
@@ -389,6 +404,8 @@ class _DynamicAspectRatiosDemo extends StatefulWidget {
 }
 
 class _DynamicAspectRatiosDemoState extends State<_DynamicAspectRatiosDemo> {
+  final FlexboxItemAnimationController _itemAnimationController =
+      FlexboxItemAnimationController.auto();
   final int _itemCount = 50;
   final Map<int, double> _loadedAspectRatios = {};
 
@@ -469,9 +486,12 @@ class _DynamicAspectRatiosDemoState extends State<_DynamicAspectRatiosDemo> {
                 padding: const EdgeInsets.all(8),
                 sliver: SliverFlexbox(
                   delegate: SliverChildBuilderDelegate(
-                    (context, index) => _NeoDynamicTile(
-                      index: index,
-                      isLoaded: _loadedAspectRatios.containsKey(index),
+                    withFlexboxItemAnimation(
+                      itemBuilder: (context, index) => _NeoDynamicTile(
+                        index: index,
+                        isLoaded: _loadedAspectRatios.containsKey(index),
+                      ),
+                      controller: _itemAnimationController,
                     ),
                     childCount: _itemCount,
                   ),
@@ -503,6 +523,8 @@ class _FlexValuesDemo extends StatefulWidget {
 }
 
 class _FlexValuesDemoState extends State<_FlexValuesDemo> {
+  final FlexboxItemAnimationController _itemAnimationController =
+      FlexboxItemAnimationController.auto();
   final List<double> _flexValues = [1, 2, 1, 3, 1];
   double _rowHeight = 100.0;
 
@@ -602,9 +624,12 @@ class _FlexValuesDemoState extends State<_FlexValuesDemo> {
                 padding: const EdgeInsets.all(12),
                 sliver: SliverFlexbox(
                   delegate: SliverChildBuilderDelegate(
-                    (context, index) => _NeoFlexTile(
-                      index: index,
-                      flexValue: _flexValues[index],
+                    withFlexboxItemAnimation(
+                      itemBuilder: (context, index) => _NeoFlexTile(
+                        index: index,
+                        flexValue: _flexValues[index],
+                      ),
+                      controller: _itemAnimationController,
                     ),
                     childCount: _flexValues.length,
                   ),
@@ -633,6 +658,8 @@ class _BuilderDemo extends StatefulWidget {
 }
 
 class _BuilderDemoState extends State<_BuilderDemo> {
+  final FlexboxItemAnimationController _itemAnimationController =
+      FlexboxItemAnimationController.auto();
   bool _varyFlexGrow = true;
   bool _varyAspectRatio = true;
 
@@ -685,14 +712,20 @@ class _BuilderDemoState extends State<_BuilderDemo> {
               SliverPadding(
                 padding: const EdgeInsets.all(8),
                 sliver: SliverFlexbox(
-                  delegate: SliverChildBuilderDelegate((context, index) {
-                    final info = _buildChildInfo(index);
-                    return _NeoBuilderTile(
-                      index: index,
-                      flexGrow: info.flexGrow,
-                      aspectRatio: info.aspectRatio,
-                    );
-                  }, childCount: 80),
+                  delegate: SliverChildBuilderDelegate(
+                    withFlexboxItemAnimation(
+                      itemBuilder: (context, index) {
+                        final info = _buildChildInfo(index);
+                        return _NeoBuilderTile(
+                          index: index,
+                          flexGrow: info.flexGrow,
+                          aspectRatio: info.aspectRatio,
+                        );
+                      },
+                      controller: _itemAnimationController,
+                    ),
+                    childCount: 80,
+                  ),
                   flexboxDelegate: SliverFlexboxDelegateWithBuilder(
                     childCount: 80,
                     childInfoBuilder: _buildChildInfo,

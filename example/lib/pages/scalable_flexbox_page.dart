@@ -36,6 +36,8 @@ class _ScalableFlexboxPageState extends State<ScalableFlexboxPage>
   late final EasyRefreshController _refreshController;
   late final FlexboxScaleController _scaleController;
   late final ScrollController _scrollController;
+  final FlexboxItemAnimationController _itemAnimationController =
+      FlexboxItemAnimationController.auto();
 
   final List<ImagePost> _posts = [];
   bool _isLoading = false;
@@ -127,15 +129,29 @@ class _ScalableFlexboxPageState extends State<ScalableFlexboxPage>
   }
 
   Future<void> _onRefresh() async {
+    _itemAnimationController.reset();
     await _loadPosts(isRefresh: true);
     _refreshController.finishRefresh();
     _refreshController.resetFooter();
   }
 
   Future<void> _onLoad() async {
+    if (_isLoading) {
+      _refreshController.finishLoad(IndicatorResult.none);
+      return;
+    }
+
+    final previousCount = _posts.length;
     await _loadPosts();
+    if (!_hasMore) {
+      _refreshController.finishLoad(IndicatorResult.noMore);
+      return;
+    }
+
     _refreshController.finishLoad(
-      _hasMore ? IndicatorResult.success : IndicatorResult.noMore,
+      _posts.length > previousCount
+          ? IndicatorResult.success
+          : IndicatorResult.fail,
     );
   }
 
@@ -440,6 +456,16 @@ class _ScalableFlexboxPageState extends State<ScalableFlexboxPage>
   }
 
   Widget _buildListVersion(bool isGridMode) {
+    final animatedItemBuilder = withFlexboxItemAnimation(
+      itemBuilder: (context, index) => _ScalableImageItem(
+        post: _posts[index],
+        index: index,
+        isGridMode: isGridMode,
+      ),
+      controller: _itemAnimationController,
+      animationIdBuilder: (index) => _posts[index].id,
+    );
+
     final aspectRatios = isGridMode
         ? List.filled(_posts.length, 1.0)
         : _posts.map((p) => p.aspectRatio).toList();
@@ -478,11 +504,7 @@ class _ScalableFlexboxPageState extends State<ScalableFlexboxPage>
                 padding: const EdgeInsets.all(2),
                 sliver: SliverFlexbox(
                   delegate: SliverChildBuilderDelegate(
-                    (context, index) => _ScalableImageItem(
-                      post: _posts[index],
-                      index: index,
-                      isGridMode: isGridMode,
-                    ),
+                    animatedItemBuilder,
                     childCount: _posts.length,
                   ),
                   flexboxDelegate: flexboxDelegate,
@@ -496,6 +518,16 @@ class _ScalableFlexboxPageState extends State<ScalableFlexboxPage>
   }
 
   Widget _buildSliverVersion(bool isGridMode) {
+    final animatedItemBuilder = withFlexboxItemAnimation(
+      itemBuilder: (context, index) => _ScalableImageItem(
+        post: _posts[index],
+        index: index,
+        isGridMode: isGridMode,
+      ),
+      controller: _itemAnimationController,
+      animationIdBuilder: (index) => _posts[index].id,
+    );
+
     final aspectRatios = isGridMode
         ? List.filled(_posts.length, 1.0)
         : _posts.map((p) => p.aspectRatio).toList();
@@ -569,11 +601,7 @@ class _ScalableFlexboxPageState extends State<ScalableFlexboxPage>
                 padding: const EdgeInsets.all(2),
                 sliver: SliverFlexbox(
                   delegate: SliverChildBuilderDelegate(
-                    (context, index) => _ScalableImageItem(
-                      post: _posts[index],
-                      index: index,
-                      isGridMode: isGridMode,
-                    ),
+                    animatedItemBuilder,
                     childCount: _posts.length,
                   ),
                   flexboxDelegate: flexboxDelegate,

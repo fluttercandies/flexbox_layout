@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:flexbox_layout/flexbox_layout.dart';
 import 'package:flutter/material.dart';
 
 import 'config/image_config.dart';
@@ -40,6 +41,9 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  final FlexboxItemAnimationController _itemAnimationController =
+      FlexboxItemAnimationController.auto();
+
   SourceType _selectedSource = ImageConfig.currentSource;
 
   static const List<_ExampleItem> _examples = [
@@ -212,10 +216,17 @@ class _HomePageState extends State<HomePage> {
           SliverPadding(
             padding: const EdgeInsets.all(16),
             sliver: SliverGrid(
-              delegate: SliverChildBuilderDelegate((context, index) {
-                final item = _examples[index];
-                return _ExampleCard(item: item);
-              }, childCount: _examples.length),
+              delegate: SliverChildBuilderDelegate(
+                withFlexboxItemAnimation(
+                  itemBuilder: (context, index) {
+                    final item = _examples[index];
+                    return _ExampleCard(item: item);
+                  },
+                  controller: _itemAnimationController,
+                  animationIdBuilder: (index) => _examples[index].title,
+                ),
+                childCount: _examples.length,
+              ),
               gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                 maxCrossAxisExtent: 280,
                 mainAxisSpacing: 16,

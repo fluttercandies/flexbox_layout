@@ -51,7 +51,7 @@ class KonachanSource extends ImageSource {
         imageUrl: _buildImageUrl(item['preview_url'] as String),
         width: (width as num).toInt(),
         height: (height as num).toInt(),
-        source: SourceType.yande,
+        source: SourceType.konachan,
       );
     }).toList();
   }

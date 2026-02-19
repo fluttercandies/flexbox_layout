@@ -75,9 +75,22 @@ class NeoBrutalismHeader extends Header {
         displayColor = NeoBrutalism.green;
         break;
       case IndicatorMode.done:
-        text = '';
+        switch (state.result) {
+          case IndicatorResult.noMore:
+            text = 'No more data';
+            displayColor = NeoBrutalism.grey;
+            break;
+          case IndicatorResult.fail:
+            text = 'Load failed';
+            displayColor = NeoBrutalism.red;
+            break;
+          case IndicatorResult.none:
+          case IndicatorResult.success:
+            text = 'Pull to load more';
+            displayColor = NeoBrutalism.purple;
+            break;
+        }
         rotation = 0;
-        displayColor = backgroundColor;
         break;
       default:
         text = '';
@@ -118,7 +131,7 @@ class NeoBrutalismFooter extends Footer {
          triggerOffset: 70,
          clamping: false,
          infiniteOffset: 70,
-         processedDuration: const Duration(seconds: 1),
+         processedDuration: Duration.zero,
        );
 
   /// Text style for the status message
@@ -168,14 +181,40 @@ class NeoBrutalismFooter extends Footer {
         displayColor = iconColor;
         break;
       case IndicatorMode.processed:
-        text = 'Load complete!';
+        switch (state.result) {
+          case IndicatorResult.noMore:
+            text = 'No more data';
+            displayColor = NeoBrutalism.grey;
+            break;
+          case IndicatorResult.fail:
+            text = 'Load failed';
+            displayColor = NeoBrutalism.red;
+            break;
+          case IndicatorResult.none:
+          case IndicatorResult.success:
+            text = 'Load complete!';
+            displayColor = NeoBrutalism.green;
+            break;
+        }
         rotation = math.pi;
-        displayColor = NeoBrutalism.green;
         break;
       case IndicatorMode.done:
-        text = '';
+        switch (state.result) {
+          case IndicatorResult.noMore:
+            text = 'No more data';
+            displayColor = NeoBrutalism.grey;
+            break;
+          case IndicatorResult.fail:
+            text = 'Load failed';
+            displayColor = NeoBrutalism.red;
+            break;
+          case IndicatorResult.none:
+          case IndicatorResult.success:
+            text = '';
+            displayColor = backgroundColor;
+            break;
+        }
         rotation = 0;
-        displayColor = backgroundColor;
         break;
       default:
         text = '';
@@ -184,7 +223,9 @@ class NeoBrutalismFooter extends Footer {
     }
 
     // Only show when there's content
-    if (text.isEmpty && state.mode == IndicatorMode.inactive) {
+    if (text.isEmpty &&
+        (state.mode == IndicatorMode.inactive ||
+            state.mode == IndicatorMode.done)) {
       return const SizedBox.shrink();
     }
 

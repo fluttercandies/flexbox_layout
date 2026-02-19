@@ -34,6 +34,8 @@ class NetworkImageGalleryPage extends StatefulWidget {
 class _NetworkImageGalleryPageState extends State<NetworkImageGalleryPage>
     with DimensionResolverMixin, SafeStateMixin {
   final List<ImagePost> _posts = [];
+  final FlexboxItemAnimationController _itemAnimationController =
+      FlexboxItemAnimationController.auto();
   bool _isLoading = false;
   bool _hasMore = true;
   int _currentPage = 1;
@@ -41,7 +43,7 @@ class _NetworkImageGalleryPageState extends State<NetworkImageGalleryPage>
 
   late final EasyRefreshController _refreshController;
 
-  double _targetRowHeight = 200.0;
+  double _targetRowHeight = 160.0;
   final int _postsPerPage = 20;
 
   @override
@@ -118,15 +120,29 @@ class _NetworkImageGalleryPageState extends State<NetworkImageGalleryPage>
   }
 
   Future<void> _onRefresh() async {
+    _itemAnimationController.reset();
     await _loadPosts(isRefresh: true);
     _refreshController.finishRefresh();
     _refreshController.resetFooter();
   }
 
   Future<void> _onLoad() async {
+    if (_isLoading) {
+      _refreshController.finishLoad(IndicatorResult.none);
+      return;
+    }
+
+    final previousCount = _posts.length;
     await _loadPosts();
+    if (!_hasMore) {
+      _refreshController.finishLoad(IndicatorResult.noMore);
+      return;
+    }
+
     _refreshController.finishLoad(
-      _hasMore ? IndicatorResult.success : IndicatorResult.noMore,
+      _posts.length > previousCount
+          ? IndicatorResult.success
+          : IndicatorResult.fail,
     );
   }
 
@@ -325,15 +341,22 @@ class _NetworkImageGalleryPageState extends State<NetworkImageGalleryPage>
           SliverPadding(
             padding: const EdgeInsets.all(4),
             sliver: SliverFlexbox(
-              delegate: SliverChildBuilderDelegate((context, index) {
-                final post = _posts[index];
-                final isResolved = isAspectRatioResolved(index);
-                return _NetworkImageItem(
-                  post: post,
-                  index: index,
-                  isAspectRatioKnown: isResolved,
-                );
-              }, childCount: _posts.length),
+              delegate: SliverChildBuilderDelegate(
+                withFlexboxItemAnimation(
+                  itemBuilder: (context, index) {
+                    final post = _posts[index];
+                    final isResolved = isAspectRatioResolved(index);
+                    return _NetworkImageItem(
+                      post: post,
+                      index: index,
+                      isAspectRatioKnown: isResolved,
+                    );
+                  },
+                  controller: _itemAnimationController,
+                  animationIdBuilder: (index) => _posts[index].id,
+                ),
+                childCount: _posts.length,
+              ),
               flexboxDelegate: SliverFlexboxDelegateWithAspectRatios(
                 aspectRatios: aspectRatios,
                 targetRowHeight: _targetRowHeight,

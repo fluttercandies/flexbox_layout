@@ -32,6 +32,8 @@ class SliverFlexboxPage extends StatefulWidget {
 class _SliverFlexboxPageState extends State<SliverFlexboxPage>
     with SafeStateMixin {
   final List<ImagePost> _posts = [];
+  final FlexboxItemAnimationController _itemAnimationController =
+      FlexboxItemAnimationController.auto();
   bool _isLoading = false;
   bool _hasMore = true;
   int _currentPage = 1;
@@ -39,7 +41,7 @@ class _SliverFlexboxPageState extends State<SliverFlexboxPage>
 
   late final EasyRefreshController _refreshController;
 
-  double _targetRowHeight = 200.0;
+  double _targetRowHeight = 160.0;
   double _mainAxisSpacing = 4.0;
   double _crossAxisSpacing = 4.0;
   final int _postsPerPage = 20;
@@ -104,15 +106,29 @@ class _SliverFlexboxPageState extends State<SliverFlexboxPage>
   }
 
   Future<void> _onRefresh() async {
+    _itemAnimationController.reset();
     await _loadPosts(isRefresh: true);
     _refreshController.finishRefresh();
     _refreshController.resetFooter();
   }
 
   Future<void> _onLoad() async {
+    if (_isLoading) {
+      _refreshController.finishLoad(IndicatorResult.none);
+      return;
+    }
+
+    final previousCount = _posts.length;
     await _loadPosts();
+    if (!_hasMore) {
+      _refreshController.finishLoad(IndicatorResult.noMore);
+      return;
+    }
+
     _refreshController.finishLoad(
-      _hasMore ? IndicatorResult.success : IndicatorResult.noMore,
+      _posts.length > previousCount
+          ? IndicatorResult.success
+          : IndicatorResult.fail,
     );
   }
 
@@ -316,15 +332,22 @@ class _SliverFlexboxPageState extends State<SliverFlexboxPage>
                 // Get aspect ratio from API response for each index
                 aspectRatios: _posts.map((p) => p.aspectRatio).toList(),
               ),
-              delegate: SliverChildBuilderDelegate((context, index) {
-                if (index >= _posts.length) return null;
-                final post = _posts[index];
-                return _ImageItem(
-                  key: ValueKey(post.id),
-                  post: post,
-                  index: index,
-                );
-              }, childCount: _posts.length),
+              delegate: SliverChildBuilderDelegate(
+                withFlexboxItemAnimation(
+                  itemBuilder: (context, index) {
+                    if (index >= _posts.length) return null;
+                    final post = _posts[index];
+                    return _ImageItem(
+                      key: ValueKey(post.id),
+                      post: post,
+                      index: index,
+                    );
+                  },
+                  controller: _itemAnimationController,
+                  animationIdBuilder: (index) => _posts[index].id,
+                ),
+                childCount: _posts.length,
+              ),
             ),
           ),
         ],

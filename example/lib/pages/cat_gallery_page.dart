@@ -52,13 +52,18 @@ class _CatGalleryPageState extends State<CatGalleryPage> with SafeStateMixin {
   /// Number of items to add per load
   static const int _itemsPerLoad = 20;
 
-  double _targetRowHeight = 200.0;
+  late final FlexboxItemAnimator _itemAnimator = FlexboxItemAnimator.manual(
+    animationIdBuilder: (index) => 'cat-item-$index',
+  );
+
+  double _targetRowHeight = 160.0;
 
   late final EasyRefreshController _refreshController;
 
   @override
   void initState() {
     super.initState();
+    _itemAnimator.enqueueInitialItems(_totalItems);
     _refreshController = EasyRefreshController(
       controlFinishRefresh: true,
       controlFinishLoad: true,
@@ -75,6 +80,8 @@ class _CatGalleryPageState extends State<CatGalleryPage> with SafeStateMixin {
     await Future<void>.delayed(const Duration(milliseconds: 500));
     setSafeState(() {
       _totalItems = catImages.length;
+      _itemAnimator.reset();
+      _itemAnimator.enqueueInitialItems(_totalItems);
     });
     _refreshController.finishRefresh();
     _refreshController.resetFooter();
@@ -82,8 +89,13 @@ class _CatGalleryPageState extends State<CatGalleryPage> with SafeStateMixin {
 
   Future<void> _onLoad() async {
     await Future<void>.delayed(const Duration(milliseconds: 300));
+    final batchStart = _totalItems;
     setSafeState(() {
       _totalItems += _itemsPerLoad;
+      _itemAnimator.enqueueRange(
+        startIndex: batchStart,
+        endIndexInclusive: _totalItems - 1,
+      );
     });
     // Infinite loading - never ends
     _refreshController.finishLoad(IndicatorResult.success);
@@ -210,13 +222,16 @@ class _CatGalleryPageState extends State<CatGalleryPage> with SafeStateMixin {
                   SliverPadding(
                     padding: const EdgeInsets.all(4),
                     sliver: SliverFlexbox(
-                      delegate: SliverChildBuilderDelegate((context, index) {
-                        final imageIndex = index % catImages.length;
-                        return _CatItem(
-                          imageInfo: catImages[imageIndex],
-                          index: index,
-                        );
-                      }, childCount: _totalItems),
+                      delegate: SliverChildBuilderDelegate(
+                        _itemAnimator.wrap((context, index) {
+                          final imageIndex = index % catImages.length;
+                          return _CatItem(
+                            imageInfo: catImages[imageIndex],
+                            index: index,
+                          );
+                        }),
+                        childCount: _totalItems,
+                      ),
                       flexboxDelegate: SliverFlexboxDelegateWithAspectRatios(
                         aspectRatios: aspectRatios,
                         targetRowHeight: _targetRowHeight,
