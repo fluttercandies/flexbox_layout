@@ -189,7 +189,7 @@ class SliverFlexboxChildGeometry {
 /// * [SliverFlexboxLine], which represents individual lines in the layout
 class SliverFlexboxLayout {
   /// Creates a sliver flexbox layout.
-  const SliverFlexboxLayout({
+  SliverFlexboxLayout({
     required this.lines,
     required this.crossAxisExtent,
     required this.mainAxisSpacing,
@@ -208,39 +208,41 @@ class SliverFlexboxLayout {
   /// The spacing between lines in the cross axis.
   final double crossAxisSpacing;
 
+  late final _SliverFlexboxLayoutCache _cache = _buildCache();
+
   /// Returns the total scroll extent.
-  double get scrollExtent {
-    if (lines.isEmpty) return 0;
-    double extent = 0;
-    for (int i = 0; i < lines.length; i++) {
-      extent += lines[i].mainAxisExtent;
-      if (i < lines.length - 1) {
-        extent += mainAxisSpacing;
-      }
-    }
-    return extent;
-  }
+  double get scrollExtent => _cache.scrollExtent;
 
   /// Returns the line index for the given scroll offset.
   int getLineIndexForScrollOffset(double scrollOffset) {
-    double offset = 0;
-    for (int i = 0; i < lines.length; i++) {
-      final lineExtent = lines[i].mainAxisExtent + mainAxisSpacing;
-      if (offset + lineExtent > scrollOffset) {
-        return i;
+    if (lines.isEmpty) return 0;
+    if (scrollOffset <= 0) return 0;
+
+    final trailingOffsets = _cache.lineBlockTrailingOffsets;
+    int low = 0;
+    int high = trailingOffsets.length - 1;
+    int result = trailingOffsets.length - 1;
+
+    while (low <= high) {
+      final mid = (low + high) >> 1;
+      if (trailingOffsets[mid] > scrollOffset) {
+        result = mid;
+        high = mid - 1;
+      } else {
+        low = mid + 1;
       }
-      offset += lineExtent;
     }
-    return lines.isEmpty ? 0 : lines.length - 1;
+
+    return result;
   }
 
   /// Returns the scroll offset for the given line index.
   double getScrollOffsetForLineIndex(int lineIndex) {
-    double offset = 0;
-    for (int i = 0; i < lineIndex && i < lines.length; i++) {
-      offset += lines[i].mainAxisExtent + mainAxisSpacing;
+    if (lineIndex <= 0 || lines.isEmpty) return 0;
+    if (lineIndex >= _cache.lineOffsets.length) {
+      return _cache.scrollExtent;
     }
-    return offset;
+    return _cache.lineOffsets[lineIndex];
   }
 
   /// Returns the first child index visible at the given scroll offset.
@@ -254,39 +256,59 @@ class SliverFlexboxLayout {
 
   /// Returns the last child index visible at the given scroll offset.
   int getLastChildIndexForScrollOffset(double scrollOffset) {
-    double offset = 0;
-    for (int i = 0; i < lines.length; i++) {
-      final lineEnd = offset + lines[i].mainAxisExtent;
-      if (lineEnd >= scrollOffset) {
-        return lines[i].lastIndex;
+    if (lines.isEmpty) return 0;
+    if (scrollOffset <= 0) return lines.first.lastIndex;
+
+    final trailingOffsets = _cache.lineTrailingOffsets;
+    int low = 0;
+    int high = trailingOffsets.length - 1;
+    int result = trailingOffsets.length - 1;
+
+    while (low <= high) {
+      final mid = (low + high) >> 1;
+      if (trailingOffsets[mid] >= scrollOffset) {
+        result = mid;
+        high = mid - 1;
+      } else {
+        low = mid + 1;
       }
-      offset = lineEnd + mainAxisSpacing;
     }
-    if (lines.isNotEmpty) {
-      return lines.last.lastIndex;
-    }
-    return 0;
+
+    return lines[result].lastIndex;
   }
 
   /// Returns the geometry for a child at the given index.
   SliverFlexboxChildGeometry getChildGeometry(int index) {
-    for (final line in lines) {
-      if (index >= line.firstIndex && index <= line.lastIndex) {
-        final lineOffset = getScrollOffsetForLineIndex(lines.indexOf(line));
-        for (final item in line.items) {
-          if (item.index == index) {
-            return SliverFlexboxChildGeometry(
-              scrollOffset: lineOffset,
-              crossAxisOffset: item.crossAxisOffset,
-              mainAxisExtent: line.mainAxisExtent,
-              crossAxisExtent: item.mainAxisExtent,
-            );
-          }
-        }
-      }
+    if (index < 0 || lines.isEmpty) {
+      return const SliverFlexboxChildGeometry(
+        scrollOffset: 0,
+        crossAxisOffset: 0,
+        mainAxisExtent: 0,
+        crossAxisExtent: 0,
+      );
     }
 
-    // Return a default geometry if not found
+    final lineIndex = _findLineIndexForChild(index);
+    if (lineIndex < 0) {
+      return const SliverFlexboxChildGeometry(
+        scrollOffset: 0,
+        crossAxisOffset: 0,
+        mainAxisExtent: 0,
+        crossAxisExtent: 0,
+      );
+    }
+
+    final line = lines[lineIndex];
+    final item = _findItemInLine(line, index);
+    if (item != null) {
+      return SliverFlexboxChildGeometry(
+        scrollOffset: _cache.lineOffsets[lineIndex],
+        crossAxisOffset: item.crossAxisOffset,
+        mainAxisExtent: line.mainAxisExtent,
+        crossAxisExtent: item.mainAxisExtent,
+      );
+    }
+
     return const SliverFlexboxChildGeometry(
       scrollOffset: 0,
       crossAxisOffset: 0,
@@ -294,6 +316,85 @@ class SliverFlexboxLayout {
       crossAxisExtent: 0,
     );
   }
+
+  _SliverFlexboxLayoutCache _buildCache() {
+    final lineCount = lines.length;
+    final lineOffsets = List<double>.filled(lineCount, 0.0, growable: false);
+    final lineTrailingOffsets =
+        List<double>.filled(lineCount, 0.0, growable: false);
+    final lineBlockTrailingOffsets =
+        List<double>.filled(lineCount, 0.0, growable: false);
+
+    double offset = 0.0;
+    for (int i = 0; i < lineCount; i++) {
+      final line = lines[i];
+      lineOffsets[i] = offset;
+
+      final trailing = offset + line.mainAxisExtent;
+      lineTrailingOffsets[i] = trailing;
+      final blockTrailing =
+          i < lineCount - 1 ? trailing + mainAxisSpacing : trailing;
+      lineBlockTrailingOffsets[i] = blockTrailing;
+
+      offset = blockTrailing;
+    }
+
+    return _SliverFlexboxLayoutCache(
+      lineOffsets: lineOffsets,
+      lineTrailingOffsets: lineTrailingOffsets,
+      lineBlockTrailingOffsets: lineBlockTrailingOffsets,
+      scrollExtent:
+          lineTrailingOffsets.isEmpty ? 0.0 : lineTrailingOffsets.last,
+    );
+  }
+
+  int _findLineIndexForChild(int index) {
+    int low = 0;
+    int high = lines.length - 1;
+    while (low <= high) {
+      final mid = (low + high) >> 1;
+      final line = lines[mid];
+      if (index < line.firstIndex) {
+        high = mid - 1;
+      } else if (index > line.lastIndex) {
+        low = mid + 1;
+      } else {
+        return mid;
+      }
+    }
+    return -1;
+  }
+
+  FlexLineItem? _findItemInLine(SliverFlexboxLine line, int index) {
+    int low = 0;
+    int high = line.items.length - 1;
+    while (low <= high) {
+      final mid = (low + high) >> 1;
+      final item = line.items[mid];
+      if (index < item.index) {
+        high = mid - 1;
+      } else if (index > item.index) {
+        low = mid + 1;
+      } else {
+        return item;
+      }
+    }
+    return null;
+  }
+}
+
+class _SliverFlexboxLayoutCache {
+  const _SliverFlexboxLayoutCache({
+    required this.lineOffsets,
+    required this.lineTrailingOffsets,
+    required this.lineBlockTrailingOffsets,
+    required this.scrollExtent,
+  });
+
+  final List<double> lineOffsets;
+  final List<double> lineTrailingOffsets;
+  final List<double> lineBlockTrailingOffsets;
+  final double scrollExtent;
 }
 
 /// Information about a child element for flexbox layout calculation.
@@ -392,6 +493,7 @@ class FlexboxLayoutCalculator {
     this.mainAxisSpacing = 0.0,
     this.crossAxisSpacing = 0.0,
     this.targetRowHeight = 200.0,
+    this.maxLines,
   });
 
   /// The direction in which flex items are placed.
@@ -418,6 +520,9 @@ class FlexboxLayoutCalculator {
   /// The target row height for layout calculation.
   final double targetRowHeight;
 
+  /// The maximum number of lines to generate.
+  final int? maxLines;
+
   /// Whether the main axis is horizontal.
   bool get isMainAxisHorizontal => flexDirection.isHorizontal;
 
@@ -432,7 +537,7 @@ class FlexboxLayoutCalculator {
     required double crossAxisExtent,
     required List<FlexChildInfo> childInfos,
   }) {
-    if (childInfos.isEmpty) {
+    if (childInfos.isEmpty || (maxLines != null && maxLines! <= 0)) {
       return SliverFlexboxLayout(
         lines: const [],
         crossAxisExtent: crossAxisExtent,
@@ -446,7 +551,7 @@ class FlexboxLayoutCalculator {
 
     int currentLineStart = 0;
     double currentLineMainExtent = 0.0;
-    List<_PendingItem> pendingItems = [];
+    final pendingItems = <_PendingItem>[];
 
     for (int i = 0; i < childInfos.length; i++) {
       final info = childInfos[i];
@@ -456,8 +561,11 @@ class FlexboxLayoutCalculator {
       // Check if adding this item would exceed the available width
       final spacingNeeded = pendingItems.isEmpty ? 0.0 : crossAxisSpacing;
       final projectedWidth = currentLineMainExtent + spacingNeeded + itemWidth;
+      final canWrapMore = maxLines == null || (lines.length + 1) < maxLines!;
 
-      if (pendingItems.isNotEmpty && projectedWidth > availableCrossExtent) {
+      if (pendingItems.isNotEmpty &&
+          projectedWidth > availableCrossExtent &&
+          canWrapMore) {
         // Create a line with the current pending items
         final line = _createFlexLine(
           pendingItems: pendingItems,
@@ -469,7 +577,9 @@ class FlexboxLayoutCalculator {
         // Start a new line
         currentLineStart = i;
         currentLineMainExtent = itemWidth;
-        pendingItems = [_PendingItem(info: info, baseWidth: itemWidth)];
+        pendingItems
+          ..clear()
+          ..add(_PendingItem(info: info, baseWidth: itemWidth));
       } else {
         // Add to current line
         currentLineMainExtent = projectedWidth;
@@ -520,12 +630,16 @@ class FlexboxLayoutCalculator {
     // Calculate the scale factor to fit the row
     // For the last line, we might not want to stretch the items to fill the row
     double scaleFactor;
+    final safeTotalBaseWidth = totalBaseWidth > 0.0 ? totalBaseWidth : 1.0;
     if (isLastLine && justifyContent == JustifyContent.flexStart) {
       // Don't scale up the last line if using flex-start
-      scaleFactor = math.min(1.0, availableForItems / totalBaseWidth);
+      scaleFactor = math.min(1.0, availableForItems / safeTotalBaseWidth);
     } else {
       // Scale to fit the available space
-      scaleFactor = availableForItems / totalBaseWidth;
+      scaleFactor = availableForItems / safeTotalBaseWidth;
+    }
+    if (!scaleFactor.isFinite || scaleFactor <= 0.0) {
+      scaleFactor = 1.0;
     }
 
     // Calculate the actual row height

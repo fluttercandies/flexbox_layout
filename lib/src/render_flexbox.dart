@@ -223,8 +223,8 @@ class RenderFlexbox extends RenderBox
   /// The flex lines calculated during layout.
   final List<FlexLine> _flexLines = [];
 
-  /// Reordered indices for child ordering.
-  List<int>? _reorderedIndices;
+  /// Reordered children for O(1) index access during layout.
+  List<RenderBox> _reorderedChildren = const [];
 
   @override
   void setupParentData(RenderBox child) {
@@ -319,14 +319,12 @@ class RenderFlexbox extends RenderBox
 
   Size _computeLayout(BoxConstraints constraints, {required bool dry}) {
     _flexLines.clear();
-    _reorderedIndices = _createReorderedIndices();
+    _reorderedChildren = _createReorderedChildren();
 
     // Reset parent data
-    RenderBox? child = firstChild;
-    while (child != null) {
+    for (final child in _reorderedChildren) {
       final parentData = child.parentData! as FlexboxParentData;
       parentData.reset();
-      child = childAfter(child);
     }
 
     // Calculate flex lines
@@ -358,37 +356,61 @@ class RenderFlexbox extends RenderBox
     return computedSize;
   }
 
-  List<int> _createReorderedIndices() {
-    final indices = <int>[];
-    final orders = <_OrderedIndex>[];
+  List<RenderBox> _createReorderedChildren() {
+    final children = <RenderBox>[];
+    bool needsSort = false;
+    int? previousOrder;
 
-    RenderBox? child = firstChild;
-    int index = 0;
-    while (child != null) {
+    for (RenderBox? child = firstChild;
+        child != null;
+        child = childAfter(child)) {
       final parentData = child.parentData! as FlexboxParentData;
-      orders.add(_OrderedIndex(index, parentData.flexItemData.order));
-      child = childAfter(child);
-      index++;
+      final order = parentData.flexItemData.order;
+      if (previousOrder != null && order < previousOrder) {
+        needsSort = true;
+      }
+      previousOrder = order;
+      children.add(child);
     }
 
-    orders.sort((a, b) => a.order.compareTo(b.order));
-    for (final ordered in orders) {
-      indices.add(ordered.index);
+    if (!needsSort || children.length <= 1) {
+      return children;
     }
 
-    return indices;
+    final orderedChildren = List<_OrderedChild>.generate(
+      children.length,
+      (index) {
+        final child = children[index];
+        final order =
+            (child.parentData! as FlexboxParentData).flexItemData.order;
+        return _OrderedChild(
+          child: child,
+          order: order,
+          originalIndex: index,
+        );
+      },
+      growable: false,
+    );
+
+    orderedChildren.sort((a, b) {
+      final orderCompare = a.order.compareTo(b.order);
+      if (orderCompare != 0) return orderCompare;
+      // Keep source order stable when "order" is identical.
+      return a.originalIndex.compareTo(b.originalIndex);
+    });
+
+    return List<RenderBox>.generate(
+      orderedChildren.length,
+      (index) => orderedChildren[index].child,
+      growable: false,
+    );
   }
 
   RenderBox? _getReorderedChildAt(int index) {
-    if (_reorderedIndices == null || index >= _reorderedIndices!.length) {
+    if (index < 0 || index >= _reorderedChildren.length) {
       return null;
     }
-    final reorderedIndex = _reorderedIndices![index];
-    RenderBox? child = firstChild;
-    for (int i = 0; i < reorderedIndex && child != null; i++) {
-      child = childAfter(child);
-    }
-    return child;
+    return _reorderedChildren[index];
   }
 
   void _calculateHorizontalFlexLines(BoxConstraints constraints) {
@@ -416,8 +438,8 @@ class RenderFlexbox extends RenderBox
     if (childCount == 0) return;
 
     int indexInFlexLine = 0;
-    double sumCrossSize = 0;
     double largestSizeInCross = 0;
+    int lastProcessedIndex = -1;
 
     var flexLine = FlexLine();
     flexLine.firstIndex = 0;
@@ -425,6 +447,7 @@ class RenderFlexbox extends RenderBox
     for (int i = 0; i < childCount; i++) {
       final child = _getReorderedChildAt(i);
       if (child == null) continue;
+      lastProcessedIndex = i;
 
       final parentData = child.parentData! as FlexboxParentData;
       final flexItemData = parentData.flexItemData;
@@ -442,7 +465,6 @@ class RenderFlexbox extends RenderBox
         flexItemData,
         mainSize,
         crossSize,
-        sumCrossSize,
         flexBasisMainSize: flexBasisMainSize,
       );
 
@@ -468,7 +490,6 @@ class RenderFlexbox extends RenderBox
         if (flexLine.itemCountNotGone > 0) {
           flexLine.lastIndex = i - 1;
           _flexLines.add(flexLine);
-          sumCrossSize += flexLine.crossSize + _crossAxisSpacing;
         }
 
         flexLine = FlexLine();
@@ -516,16 +537,11 @@ class RenderFlexbox extends RenderBox
       }
 
       indexInFlexLine++;
-
-      // Check for max lines
-      if (_maxLines != null && _flexLines.length >= _maxLines!) {
-        break;
-      }
     }
 
     // Add the last flex line
     if (flexLine.itemCount > 0) {
-      flexLine.lastIndex = childCount - 1;
+      flexLine.lastIndex = lastProcessedIndex;
       _flexLines.add(flexLine);
     }
   }
@@ -533,14 +549,14 @@ class RenderFlexbox extends RenderBox
   BoxConstraints _createChildConstraints(
     FlexItemData flexItemData,
     double mainSize,
-    double crossSize,
-    double usedCrossSize, {
+    double crossSize, {
     double? flexBasisMainSize,
   }) {
     final minWidth = flexItemData.minWidth ?? 0;
     final minHeight = flexItemData.minHeight ?? 0;
     final maxWidth = flexItemData.maxWidth ?? double.infinity;
     final maxHeight = flexItemData.maxHeight ?? double.infinity;
+    final effectiveCrossLimit = crossSize.isFinite ? math.max(0.0, crossSize) : double.infinity;
 
     if (_isMainAxisHorizontal) {
       // If flexBasisPercent is set, use it as the exact width
@@ -550,14 +566,14 @@ class RenderFlexbox extends RenderBox
           minWidth: constrainedWidth,
           maxWidth: constrainedWidth,
           minHeight: minHeight,
-          maxHeight: maxHeight.clamp(0, crossSize - usedCrossSize),
+          maxHeight: math.min(maxHeight, effectiveCrossLimit),
         );
       }
       return BoxConstraints(
         minWidth: minWidth,
         maxWidth: maxWidth,
         minHeight: minHeight,
-        maxHeight: maxHeight.clamp(0, crossSize - usedCrossSize),
+        maxHeight: math.min(maxHeight, effectiveCrossLimit),
       );
     } else {
       // If flexBasisPercent is set, use it as the exact height
@@ -565,14 +581,14 @@ class RenderFlexbox extends RenderBox
         final constrainedHeight = flexBasisMainSize.clamp(minHeight, maxHeight);
         return BoxConstraints(
           minWidth: minWidth,
-          maxWidth: maxWidth.clamp(0, crossSize - usedCrossSize),
+          maxWidth: math.min(maxWidth, effectiveCrossLimit),
           minHeight: constrainedHeight,
           maxHeight: constrainedHeight,
         );
       }
       return BoxConstraints(
         minWidth: minWidth,
-        maxWidth: maxWidth.clamp(0, crossSize - usedCrossSize),
+        maxWidth: math.min(maxWidth, effectiveCrossLimit),
         minHeight: minHeight,
         maxHeight: maxHeight,
       );
@@ -621,8 +637,12 @@ class RenderFlexbox extends RenderBox
     int indexInFlexLine,
   ) {
     if (_flexWrap == FlexWrap.noWrap) return false;
+    // _flexLines only contains finalized lines; the current in-progress line
+    // should also count toward maxLines.
+    if (_maxLines != null && (_flexLines.length + 1) >= _maxLines!) {
+      return false;
+    }
     if (flexItemData.wrapBefore && indexInFlexLine > 0) return true;
-    if (_maxLines != null && _flexLines.length >= _maxLines!) return false;
     return maxSize.isFinite && currentLength + childLength > maxSize;
   }
 
@@ -1276,8 +1296,13 @@ class RenderFlexbox extends RenderBox
   }
 }
 
-class _OrderedIndex {
-  _OrderedIndex(this.index, this.order);
-  final int index;
+class _OrderedChild {
+  _OrderedChild({
+    required this.child,
+    required this.order,
+    required this.originalIndex,
+  });
+  final RenderBox child;
   final int order;
+  final int originalIndex;
 }

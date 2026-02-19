@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/rendering.dart';
 
 import 'enums.dart';
@@ -17,6 +18,16 @@ typedef FlexChildAspectRatioProvider = double? Function(int index);
 /// Signature for a callback that provides flex item data for a child at
 /// the given index.
 typedef FlexChildDataProvider = FlexItemData Function(int index);
+
+int _limitChildCountByMaxLines({
+  required int childCount,
+  required int itemsPerLine,
+  required int? maxLines,
+}) {
+  if (maxLines == null) return childCount;
+  if (maxLines <= 0) return 0;
+  return math.min(childCount, itemsPerLine * maxLines);
+}
 
 /// A delegate that controls the layout of children in a sliver flexbox.
 abstract class SliverFlexboxDelegate {
@@ -52,6 +63,18 @@ abstract class SliverFlexboxDelegate {
 
   /// Returns the flex item data for a child at the given index.
   FlexItemData getFlexItemData(int index);
+
+  /// Whether layout results can be cached across scroll-only relayouts.
+  ///
+  /// Delegates that depend on callbacks with volatile external state should
+  /// override this and return `false`.
+  bool get shouldCacheLayout => true;
+
+  /// Whether a new delegate instance should trigger relayout.
+  ///
+  /// This is used to skip unnecessary full relayout when a parent rebuilds
+  /// with an equivalent delegate configuration.
+  bool shouldRelayout(covariant SliverFlexboxDelegate oldDelegate) => true;
 
   /// Calculates the layout for the given constraints.
   SliverFlexboxLayout getLayout(
@@ -108,6 +131,22 @@ class SliverFlexboxDelegateWithFixedCrossAxisCount
   final double childAspectRatio;
 
   @override
+  bool shouldRelayout(
+    covariant SliverFlexboxDelegateWithFixedCrossAxisCount oldDelegate,
+  ) {
+    return oldDelegate.flexDirection != flexDirection ||
+        oldDelegate.flexWrap != flexWrap ||
+        oldDelegate.justifyContent != justifyContent ||
+        oldDelegate.alignItems != alignItems ||
+        oldDelegate.alignContent != alignContent ||
+        oldDelegate.mainAxisSpacing != mainAxisSpacing ||
+        oldDelegate.crossAxisSpacing != crossAxisSpacing ||
+        oldDelegate.maxLines != maxLines ||
+        oldDelegate.childAspectRatio != childAspectRatio ||
+        oldDelegate.crossAxisCount != crossAxisCount;
+  }
+
+  @override
   FlexItemData getFlexItemData(int index) {
     return const FlexItemData(flexGrow: 1.0, flexShrink: 1.0);
   }
@@ -118,72 +157,55 @@ class SliverFlexboxDelegateWithFixedCrossAxisCount
     required int childCount,
   }) {
     final crossAxisExtent = constraints.crossAxisExtent;
-    final usableCrossAxisExtent =
-        crossAxisExtent - (crossAxisSpacing * (crossAxisCount - 1));
+    final effectiveChildCount = _limitChildCountByMaxLines(
+      childCount: childCount,
+      itemsPerLine: crossAxisCount,
+      maxLines: maxLines,
+    );
+    if (effectiveChildCount == 0) {
+      return SliverFlexboxLayout(
+        lines: const [],
+        crossAxisExtent: crossAxisExtent,
+        mainAxisSpacing: mainAxisSpacing,
+        crossAxisSpacing: crossAxisSpacing,
+      );
+    }
+
+    final usableCrossAxisExtent = math.max(
+      0.0,
+      crossAxisExtent - (crossAxisSpacing * (crossAxisCount - 1)),
+    );
     final childCrossAxisExtent = usableCrossAxisExtent / crossAxisCount;
     final childMainAxisExtent = childCrossAxisExtent / childAspectRatio;
 
     final lines = <SliverFlexboxLine>[];
-    int currentLineStart = 0;
-    int itemsInLine = 0;
-
-    for (int i = 0; i < childCount; i++) {
-      if (itemsInLine >= crossAxisCount) {
-        final items = <FlexLineItem>[];
-        for (int j = 0; j < crossAxisCount; j++) {
-          items.add(
-            FlexLineItem(
-              index: currentLineStart + j,
-              mainAxisExtent: childCrossAxisExtent,
-              crossAxisExtent: childMainAxisExtent,
-              crossAxisOffset: j * (childCrossAxisExtent + crossAxisSpacing),
-              flexGrow: 1.0,
-              flexShrink: 1.0,
-              originalMainAxisExtent: childCrossAxisExtent,
-            ),
-          );
-        }
-        lines.add(
-          SliverFlexboxLine(
-            firstIndex: currentLineStart,
-            lastIndex: i - 1,
-            mainAxisExtent: childMainAxisExtent,
-            crossAxisExtent: childCrossAxisExtent * crossAxisCount +
-                crossAxisSpacing * (crossAxisCount - 1),
-            itemCount: itemsInLine,
-            items: items,
-          ),
-        );
-        currentLineStart = i;
-        itemsInLine = 0;
-      }
-      itemsInLine++;
-    }
-
-    // Add the last line
-    if (itemsInLine > 0) {
-      final items = <FlexLineItem>[];
-      for (int j = 0; j < itemsInLine; j++) {
-        items.add(
-          FlexLineItem(
-            index: currentLineStart + j,
-            mainAxisExtent: childCrossAxisExtent,
-            crossAxisExtent: childMainAxisExtent,
-            crossAxisOffset: j * (childCrossAxisExtent + crossAxisSpacing),
-            flexGrow: 1.0,
-            flexShrink: 1.0,
-            originalMainAxisExtent: childCrossAxisExtent,
-          ),
-        );
-      }
+    final stride = childCrossAxisExtent + crossAxisSpacing;
+    for (int lineStart = 0;
+        lineStart < effectiveChildCount;
+        lineStart += crossAxisCount) {
+      final itemCount =
+          math.min(crossAxisCount, effectiveChildCount - lineStart);
+      final items = List<FlexLineItem>.generate(
+        itemCount,
+        (j) => FlexLineItem(
+          index: lineStart + j,
+          mainAxisExtent: childCrossAxisExtent,
+          crossAxisExtent: childMainAxisExtent,
+          crossAxisOffset: j * stride,
+          flexGrow: 1.0,
+          flexShrink: 1.0,
+          originalMainAxisExtent: childCrossAxisExtent,
+        ),
+        growable: false,
+      );
       lines.add(
         SliverFlexboxLine(
-          firstIndex: currentLineStart,
-          lastIndex: childCount - 1,
+          firstIndex: lineStart,
+          lastIndex: lineStart + itemCount - 1,
           mainAxisExtent: childMainAxisExtent,
-          crossAxisExtent: childCrossAxisExtent * itemsInLine +
-              crossAxisSpacing * (itemsInLine - 1),
-          itemCount: itemsInLine,
+          crossAxisExtent: childCrossAxisExtent * itemCount +
+              crossAxisSpacing * (itemCount - 1),
+          itemCount: itemCount,
           items: items,
         ),
       );
@@ -246,12 +268,35 @@ class SliverFlexboxDelegateWithMaxCrossAxisExtent
   final double childAspectRatio;
 
   @override
+  bool shouldRelayout(
+    covariant SliverFlexboxDelegateWithMaxCrossAxisExtent oldDelegate,
+  ) {
+    return oldDelegate.flexDirection != flexDirection ||
+        oldDelegate.flexWrap != flexWrap ||
+        oldDelegate.justifyContent != justifyContent ||
+        oldDelegate.alignItems != alignItems ||
+        oldDelegate.alignContent != alignContent ||
+        oldDelegate.mainAxisSpacing != mainAxisSpacing ||
+        oldDelegate.crossAxisSpacing != crossAxisSpacing ||
+        oldDelegate.maxLines != maxLines ||
+        oldDelegate.childAspectRatio != childAspectRatio ||
+        oldDelegate.maxCrossAxisExtent != maxCrossAxisExtent;
+  }
+
+  @override
   FlexItemData getFlexItemData(int index) {
     return const FlexItemData(flexGrow: 1.0, flexShrink: 1.0);
   }
 
   int _getCrossAxisCount(double crossAxisExtent) {
-    return (crossAxisExtent / (maxCrossAxisExtent + crossAxisSpacing)).ceil();
+    if (!crossAxisExtent.isFinite || crossAxisExtent <= 0) {
+      return 1;
+    }
+    final denominator = maxCrossAxisExtent + crossAxisSpacing;
+    if (denominator <= 0) {
+      return 1;
+    }
+    return math.max(1, (crossAxisExtent / denominator).ceil());
   }
 
   @override
@@ -261,72 +306,55 @@ class SliverFlexboxDelegateWithMaxCrossAxisExtent
   }) {
     final crossAxisExtent = constraints.crossAxisExtent;
     final crossAxisCount = _getCrossAxisCount(crossAxisExtent);
-    final usableCrossAxisExtent =
-        crossAxisExtent - (crossAxisSpacing * (crossAxisCount - 1));
+    final effectiveChildCount = _limitChildCountByMaxLines(
+      childCount: childCount,
+      itemsPerLine: crossAxisCount,
+      maxLines: maxLines,
+    );
+    if (effectiveChildCount == 0) {
+      return SliverFlexboxLayout(
+        lines: const [],
+        crossAxisExtent: crossAxisExtent,
+        mainAxisSpacing: mainAxisSpacing,
+        crossAxisSpacing: crossAxisSpacing,
+      );
+    }
+
+    final usableCrossAxisExtent = math.max(
+      0.0,
+      crossAxisExtent - (crossAxisSpacing * (crossAxisCount - 1)),
+    );
     final childCrossAxisExtent = usableCrossAxisExtent / crossAxisCount;
     final childMainAxisExtent = childCrossAxisExtent / childAspectRatio;
 
     final lines = <SliverFlexboxLine>[];
-    int currentLineStart = 0;
-    int itemsInLine = 0;
-
-    for (int i = 0; i < childCount; i++) {
-      if (itemsInLine >= crossAxisCount) {
-        final items = <FlexLineItem>[];
-        for (int j = 0; j < crossAxisCount; j++) {
-          items.add(
-            FlexLineItem(
-              index: currentLineStart + j,
-              mainAxisExtent: childCrossAxisExtent,
-              crossAxisExtent: childMainAxisExtent,
-              crossAxisOffset: j * (childCrossAxisExtent + crossAxisSpacing),
-              flexGrow: 1.0,
-              flexShrink: 1.0,
-              originalMainAxisExtent: childCrossAxisExtent,
-            ),
-          );
-        }
-        lines.add(
-          SliverFlexboxLine(
-            firstIndex: currentLineStart,
-            lastIndex: i - 1,
-            mainAxisExtent: childMainAxisExtent,
-            crossAxisExtent: childCrossAxisExtent * crossAxisCount +
-                crossAxisSpacing * (crossAxisCount - 1),
-            itemCount: itemsInLine,
-            items: items,
-          ),
-        );
-        currentLineStart = i;
-        itemsInLine = 0;
-      }
-      itemsInLine++;
-    }
-
-    // Add the last line
-    if (itemsInLine > 0) {
-      final items = <FlexLineItem>[];
-      for (int j = 0; j < itemsInLine; j++) {
-        items.add(
-          FlexLineItem(
-            index: currentLineStart + j,
-            mainAxisExtent: childCrossAxisExtent,
-            crossAxisExtent: childMainAxisExtent,
-            crossAxisOffset: j * (childCrossAxisExtent + crossAxisSpacing),
-            flexGrow: 1.0,
-            flexShrink: 1.0,
-            originalMainAxisExtent: childCrossAxisExtent,
-          ),
-        );
-      }
+    final stride = childCrossAxisExtent + crossAxisSpacing;
+    for (int lineStart = 0;
+        lineStart < effectiveChildCount;
+        lineStart += crossAxisCount) {
+      final itemCount =
+          math.min(crossAxisCount, effectiveChildCount - lineStart);
+      final items = List<FlexLineItem>.generate(
+        itemCount,
+        (j) => FlexLineItem(
+          index: lineStart + j,
+          mainAxisExtent: childCrossAxisExtent,
+          crossAxisExtent: childMainAxisExtent,
+          crossAxisOffset: j * stride,
+          flexGrow: 1.0,
+          flexShrink: 1.0,
+          originalMainAxisExtent: childCrossAxisExtent,
+        ),
+        growable: false,
+      );
       lines.add(
         SliverFlexboxLine(
-          firstIndex: currentLineStart,
-          lastIndex: childCount - 1,
+          firstIndex: lineStart,
+          lastIndex: lineStart + itemCount - 1,
           mainAxisExtent: childMainAxisExtent,
-          crossAxisExtent: childCrossAxisExtent * itemsInLine +
-              crossAxisSpacing * (itemsInLine - 1),
-          itemCount: itemsInLine,
+          crossAxisExtent: childCrossAxisExtent * itemCount +
+              crossAxisSpacing * (itemCount - 1),
+          itemCount: itemCount,
           items: items,
         ),
       );
@@ -416,6 +444,31 @@ class SliverFlexboxDelegateWithAspectRatios extends SliverFlexboxDelegate {
   final int? maxLines;
 
   @override
+  bool shouldRelayout(
+    covariant SliverFlexboxDelegateWithAspectRatios oldDelegate,
+  ) {
+    final aspectRatiosChanged =
+        !listEquals(oldDelegate.aspectRatios, aspectRatios);
+    final flexGrowValuesChanged =
+        !listEquals(oldDelegate.flexGrowValues, flexGrowValues);
+    final flexShrinkValuesChanged =
+        !listEquals(oldDelegate.flexShrinkValues, flexShrinkValues);
+
+    return oldDelegate.flexDirection != flexDirection ||
+        oldDelegate.flexWrap != flexWrap ||
+        oldDelegate.justifyContent != justifyContent ||
+        oldDelegate.alignItems != alignItems ||
+        oldDelegate.alignContent != alignContent ||
+        oldDelegate.mainAxisSpacing != mainAxisSpacing ||
+        oldDelegate.crossAxisSpacing != crossAxisSpacing ||
+        oldDelegate.maxLines != maxLines ||
+        oldDelegate.targetRowHeight != targetRowHeight ||
+        aspectRatiosChanged ||
+        flexGrowValuesChanged ||
+        flexShrinkValuesChanged;
+  }
+
+  @override
   FlexItemData getFlexItemData(int index) {
     return FlexItemData(
       flexGrow: flexGrowValues != null && index < flexGrowValues!.length
@@ -441,6 +494,7 @@ class SliverFlexboxDelegateWithAspectRatios extends SliverFlexboxDelegate {
       mainAxisSpacing: mainAxisSpacing,
       crossAxisSpacing: crossAxisSpacing,
       targetRowHeight: targetRowHeight,
+      maxLines: maxLines,
     );
 
     final actualChildCount = math.min(childCount, aspectRatios.length);
@@ -545,6 +599,14 @@ class SliverFlexboxDelegateWithDynamicAspectRatios
   final int? maxLines;
 
   @override
+  bool shouldRelayout(
+    covariant SliverFlexboxDelegateWithDynamicAspectRatios oldDelegate,
+  ) {
+    // Callback results are data-dependent and can change without reference changes.
+    return true;
+  }
+
+  @override
   FlexItemData getFlexItemData(int index) {
     if (flexDataProvider != null) {
       return flexDataProvider!(index);
@@ -566,6 +628,7 @@ class SliverFlexboxDelegateWithDynamicAspectRatios
       mainAxisSpacing: mainAxisSpacing,
       crossAxisSpacing: crossAxisSpacing,
       targetRowHeight: targetRowHeight,
+      maxLines: maxLines,
     );
 
     final actualChildCount = math.min(childCount, this.childCount);
@@ -641,6 +704,24 @@ class SliverFlexboxDelegateWithFlexValues extends SliverFlexboxDelegate {
   final int? maxLines;
 
   @override
+  bool shouldRelayout(
+    covariant SliverFlexboxDelegateWithFlexValues oldDelegate,
+  ) {
+    final flexValuesChanged = !listEquals(oldDelegate.flexValues, flexValues);
+
+    return oldDelegate.flexDirection != flexDirection ||
+        oldDelegate.flexWrap != flexWrap ||
+        oldDelegate.justifyContent != justifyContent ||
+        oldDelegate.alignItems != alignItems ||
+        oldDelegate.alignContent != alignContent ||
+        oldDelegate.mainAxisSpacing != mainAxisSpacing ||
+        oldDelegate.crossAxisSpacing != crossAxisSpacing ||
+        oldDelegate.maxLines != maxLines ||
+        oldDelegate.rowHeight != rowHeight ||
+        flexValuesChanged;
+  }
+
+  @override
   FlexItemData getFlexItemData(int index) {
     final flexGrow = index < flexValues.length ? flexValues[index] : 1.0;
     return FlexItemData(flexGrow: flexGrow, flexShrink: 0.0);
@@ -654,7 +735,7 @@ class SliverFlexboxDelegateWithFlexValues extends SliverFlexboxDelegate {
     final crossAxisExtent = constraints.crossAxisExtent;
     final actualChildCount = math.min(childCount, flexValues.length);
 
-    if (actualChildCount == 0) {
+    if (actualChildCount == 0 || (maxLines != null && maxLines! <= 0)) {
       return SliverFlexboxLayout(
         lines: const [],
         crossAxisExtent: crossAxisExtent,
@@ -783,6 +864,12 @@ class SliverFlexboxDelegateWithBuilder extends SliverFlexboxDelegate {
   final int? maxLines;
 
   @override
+  bool shouldRelayout(covariant SliverFlexboxDelegateWithBuilder oldDelegate) {
+    // Builder output can change based on external state even with same callback.
+    return true;
+  }
+
+  @override
   FlexItemData getFlexItemData(int index) {
     final info = childInfoBuilder(index);
     return FlexItemData(flexGrow: info.flexGrow, flexShrink: info.flexShrink);
@@ -802,6 +889,7 @@ class SliverFlexboxDelegateWithBuilder extends SliverFlexboxDelegate {
       mainAxisSpacing: mainAxisSpacing,
       crossAxisSpacing: crossAxisSpacing,
       targetRowHeight: targetRowHeight,
+      maxLines: maxLines,
     );
 
     final actualChildCount = math.min(childCount, this.childCount);
@@ -897,6 +985,26 @@ class SliverFlexboxDelegateWithDirectExtent extends SliverFlexboxDelegate {
   final int? maxLines;
 
   @override
+  bool shouldRelayout(
+    covariant SliverFlexboxDelegateWithDirectExtent oldDelegate,
+  ) {
+    final aspectRatiosChanged =
+        !listEquals(oldDelegate.aspectRatios, aspectRatios);
+
+    return oldDelegate.flexDirection != flexDirection ||
+        oldDelegate.flexWrap != flexWrap ||
+        oldDelegate.justifyContent != justifyContent ||
+        oldDelegate.alignItems != alignItems ||
+        oldDelegate.alignContent != alignContent ||
+        oldDelegate.mainAxisSpacing != mainAxisSpacing ||
+        oldDelegate.crossAxisSpacing != crossAxisSpacing ||
+        oldDelegate.maxLines != maxLines ||
+        oldDelegate.targetExtent != targetExtent ||
+        oldDelegate.fillFactor != fillFactor ||
+        aspectRatiosChanged;
+  }
+
+  @override
   FlexItemData getFlexItemData(int index) {
     return const FlexItemData(flexGrow: 0.0, flexShrink: 0.0);
   }
@@ -909,7 +1017,7 @@ class SliverFlexboxDelegateWithDirectExtent extends SliverFlexboxDelegate {
     final crossAxisExtent = constraints.crossAxisExtent;
     final actualChildCount = math.min(childCount, aspectRatios.length);
 
-    if (actualChildCount == 0) {
+    if (actualChildCount == 0 || (maxLines != null && maxLines! <= 0)) {
       return SliverFlexboxLayout(
         lines: const [],
         crossAxisExtent: crossAxisExtent,
@@ -921,19 +1029,20 @@ class SliverFlexboxDelegateWithDirectExtent extends SliverFlexboxDelegate {
     final lines = <SliverFlexboxLine>[];
     int currentLineStart = 0;
     double currentLineWidth = 0.0;
-    List<_DirectExtentItem> pendingItems = [];
+    final pendingItems = <_DirectExtentItem>[];
 
     for (int i = 0; i < actualChildCount; i++) {
-      final aspectRatio = aspectRatios[i];
       // Item width is directly proportional to targetExtent
-      final itemWidth = targetExtent * aspectRatio;
-      final itemHeight = targetExtent;
+      final itemWidth = targetExtent * aspectRatios[i];
 
       final spacingNeeded = pendingItems.isEmpty ? 0.0 : crossAxisSpacing;
       final projectedWidth = currentLineWidth + spacingNeeded + itemWidth;
+      final canWrapMore = maxLines == null || (lines.length + 1) < maxLines!;
 
       // Start a new line when items exceed available width
-      if (pendingItems.isNotEmpty && projectedWidth > crossAxisExtent) {
+      if (pendingItems.isNotEmpty &&
+          projectedWidth > crossAxisExtent &&
+          canWrapMore) {
         // Create the line with items at their exact target size
         lines.add(_createDirectLine(
           pendingItems: pendingItems,
@@ -946,22 +1055,20 @@ class SliverFlexboxDelegateWithDirectExtent extends SliverFlexboxDelegate {
         // Start new line
         currentLineStart = i;
         currentLineWidth = itemWidth;
-        pendingItems = [
+        pendingItems
+          ..clear()
+          ..add(_DirectExtentItem(
+            index: i,
+            width: itemWidth,
+          ));
+      } else {
+        currentLineWidth = projectedWidth;
+        pendingItems.add(
           _DirectExtentItem(
             index: i,
             width: itemWidth,
-            height: itemHeight,
-            aspectRatio: aspectRatio,
           ),
-        ];
-      } else {
-        currentLineWidth = projectedWidth;
-        pendingItems.add(_DirectExtentItem(
-          index: i,
-          width: itemWidth,
-          height: itemHeight,
-          aspectRatio: aspectRatio,
-        ));
+        );
       }
     }
 
@@ -1002,10 +1109,15 @@ class SliverFlexboxDelegateWithDirectExtent extends SliverFlexboxDelegate {
 
     // Calculate scale factor to fill the row
     final availableForItems = availableWidth - totalSpacing;
-    final fillScale = availableForItems / totalBaseWidth;
+    final safeBaseWidth = totalBaseWidth > 0.0 ? totalBaseWidth : 1.0;
+    final fillScale =
+        availableForItems > 0.0 ? availableForItems / safeBaseWidth : 1.0;
 
     // Interpolate between 1.0 (no fill) and fillScale (full fill)
-    final actualScale = 1.0 + (fillScale - 1.0) * fillFactor;
+    var actualScale = 1.0 + (fillScale - 1.0) * fillFactor;
+    if (!actualScale.isFinite || actualScale <= 0.0) {
+      actualScale = 1.0;
+    }
     final actualRowHeight = rowHeight * actualScale;
 
     final items = <FlexLineItem>[];
@@ -1048,12 +1160,8 @@ class _DirectExtentItem {
   const _DirectExtentItem({
     required this.index,
     required this.width,
-    required this.height,
-    required this.aspectRatio,
   });
 
   final int index;
   final double width;
-  final double height;
-  final double aspectRatio;
 }

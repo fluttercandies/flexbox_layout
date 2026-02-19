@@ -548,7 +548,7 @@ class BatchDimensionResolver {
   final void Function(Object key, Object error)? onError;
 
   final Map<Object, ItemDimension> _results = {};
-  final List<_BatchItem> _pending = [];
+  final Queue<_BatchItem> _pending = Queue<_BatchItem>();
   int _active = 0;
   int _total = 0;
   bool _disposed = false;
@@ -589,7 +589,7 @@ class BatchDimensionResolver {
     if (_disposed) return;
 
     while (_active < maxConcurrent && _pending.isNotEmpty) {
-      final item = _pending.removeAt(0);
+      final item = _pending.removeFirst();
       _active++;
 
       item.resolve().then(

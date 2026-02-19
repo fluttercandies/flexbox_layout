@@ -127,12 +127,61 @@ class RenderSliverFlexbox extends RenderSliverMultiBoxAdaptor {
   /// When changed, the layout is marked as needing to be recomputed.
   SliverFlexboxDelegate get flexboxDelegate => _flexboxDelegate;
   SliverFlexboxDelegate _flexboxDelegate;
+  SliverFlexboxLayout? _cachedLayout;
+  double? _cachedCrossAxisExtent;
+  int? _cachedChildCount;
+  AxisDirection? _cachedAxisDirection;
+  GrowthDirection? _cachedGrowthDirection;
+
   set flexboxDelegate(SliverFlexboxDelegate value) {
-    if (_flexboxDelegate == value) {
+    if (identical(_flexboxDelegate, value)) {
       return;
     }
+    final needsRelayout = value.runtimeType != _flexboxDelegate.runtimeType ||
+        value.shouldRelayout(_flexboxDelegate);
     _flexboxDelegate = value;
-    markNeedsLayout();
+    if (needsRelayout) {
+      _invalidateLayoutCache();
+      markNeedsLayout();
+    }
+  }
+
+  void _invalidateLayoutCache() {
+    _cachedLayout = null;
+    _cachedCrossAxisExtent = null;
+    _cachedChildCount = null;
+    _cachedAxisDirection = null;
+    _cachedGrowthDirection = null;
+  }
+
+  SliverFlexboxLayout _getLayout(
+    SliverConstraints constraints, {
+    required int childCount,
+  }) {
+    if (_flexboxDelegate.shouldCacheLayout &&
+        _cachedLayout != null &&
+        _cachedChildCount == childCount &&
+        _cachedAxisDirection == constraints.axisDirection &&
+        _cachedGrowthDirection == constraints.growthDirection &&
+        _cachedCrossAxisExtent != null &&
+        (_cachedCrossAxisExtent! - constraints.crossAxisExtent).abs() < 0.001) {
+      return _cachedLayout!;
+    }
+
+    final layout = _flexboxDelegate.getLayout(
+      constraints,
+      childCount: childCount,
+    );
+    if (_flexboxDelegate.shouldCacheLayout) {
+      _cachedLayout = layout;
+      _cachedChildCount = childCount;
+      _cachedCrossAxisExtent = constraints.crossAxisExtent;
+      _cachedAxisDirection = constraints.axisDirection;
+      _cachedGrowthDirection = constraints.growthDirection;
+    } else {
+      _invalidateLayoutCache();
+    }
+    return layout;
   }
 
   /// Returns the cross-axis position of the given child.
@@ -165,7 +214,7 @@ class RenderSliverFlexbox extends RenderSliverMultiBoxAdaptor {
       return;
     }
 
-    final SliverFlexboxLayout layout = _flexboxDelegate.getLayout(
+    final SliverFlexboxLayout layout = _getLayout(
       constraints,
       childCount: childCount,
     );
