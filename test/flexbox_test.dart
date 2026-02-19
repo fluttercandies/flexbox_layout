@@ -216,6 +216,108 @@ void main() {
       expect(item2Pos.dy, greaterThan(item1Pos.dy));
     });
 
+    testWidgets('bounded cross axis with many wrapped lines does not throw',
+        (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 80,
+              height: 100,
+              child: Flexbox(
+                flexDirection: FlexDirection.row,
+                flexWrap: FlexWrap.wrap,
+                children: [
+                  SizedBox(width: 70, height: 40),
+                  SizedBox(width: 70, height: 40),
+                  SizedBox(width: 70, height: 40),
+                  SizedBox(width: 70, height: 40),
+                  SizedBox(width: 70, height: 40),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pump();
+      expect(find.byType(SizedBox), findsNWidgets(6));
+    });
+
+    testWidgets('maxLines keeps overflow items in the last allowed line',
+        (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 220,
+              height: 200,
+              child: Flexbox(
+                flexDirection: FlexDirection.row,
+                flexWrap: FlexWrap.wrap,
+                maxLines: 1,
+                children: [
+                  SizedBox(key: Key('maxLineItem1'), width: 100, height: 40),
+                  SizedBox(key: Key('maxLineItem2'), width: 100, height: 40),
+                  SizedBox(key: Key('maxLineItem3'), width: 100, height: 40),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      final item1Pos = tester.getTopLeft(find.byKey(const Key('maxLineItem1')));
+      final item2Pos = tester.getTopLeft(find.byKey(const Key('maxLineItem2')));
+      final item3Pos = tester.getTopLeft(find.byKey(const Key('maxLineItem3')));
+
+      expect(item2Pos.dy, closeTo(item1Pos.dy, 0.001));
+      expect(item3Pos.dy, closeTo(item1Pos.dy, 0.001));
+      expect(item3Pos.dx, greaterThan(item2Pos.dx));
+    });
+
+    testWidgets('maxLines prevents wrapBefore from creating extra lines',
+        (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 220,
+              height: 200,
+              child: Flexbox(
+                flexDirection: FlexDirection.row,
+                flexWrap: FlexWrap.wrap,
+                maxLines: 1,
+                children: [
+                  SizedBox(key: Key('maxLineWrap1'), width: 100, height: 40),
+                  FlexItem(
+                    wrapBefore: true,
+                    child: SizedBox(
+                      key: Key('maxLineWrap2'),
+                      width: 100,
+                      height: 40,
+                    ),
+                  ),
+                  SizedBox(key: Key('maxLineWrap3'), width: 100, height: 40),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      final item1Pos = tester.getTopLeft(find.byKey(const Key('maxLineWrap1')));
+      final item2Pos = tester.getTopLeft(find.byKey(const Key('maxLineWrap2')));
+      final item3Pos = tester.getTopLeft(find.byKey(const Key('maxLineWrap3')));
+
+      expect(item2Pos.dy, closeTo(item1Pos.dy, 0.001));
+      expect(item3Pos.dy, closeTo(item1Pos.dy, 0.001));
+    });
+
     testWidgets('minWidth/maxWidth constraints are respected', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
