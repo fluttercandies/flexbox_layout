@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/widgets.dart';
 
@@ -27,7 +28,7 @@ enum FlexboxScaleMode {
 ///   snapPoints: [80, 120, 160, 200, 250, 300],
 /// );
 ///
-/// // Use with a TickerProvider (e.g., SingleTickerProviderStateMixin)
+/// // Use with a TickerProvider (e.g., TickerProviderStateMixin)
 /// controller.attachTickerProvider(this);
 ///
 /// // In your widget's dispose:
@@ -55,7 +56,9 @@ class FlexboxScaleController extends ChangeNotifier {
         _currentExtent = initialExtent,
         _baseExtent = initialExtent,
         _snapPoints =
-            snapPoints ?? _generateDefaultSnapPoints(minExtent, maxExtent);
+            snapPoints ?? _generateDefaultSnapPoints(minExtent, maxExtent) {
+    _extentListenable = ValueNotifier<double>(_currentExtent);
+  }
 
   /// The minimum allowed extent (maximum zoom in, more items visible).
   final double minExtent;
@@ -76,14 +79,17 @@ class FlexboxScaleController extends ChangeNotifier {
   double _baseExtent;
   bool _isScaling = false;
   double _fillFactor = 1.0;
+  late final ValueNotifier<double> _extentListenable;
 
   AnimationController? _animationController;
-  Animation<double>? _animation;
   AnimationController? _fillFactorController;
   Animation<double>? _fillFactorAnimation;
 
   /// The current extent value.
   double get currentExtent => _currentExtent;
+
+  /// A listenable that only emits when [currentExtent] changes.
+  ValueListenable<double> get extentListenable => _extentListenable;
 
   /// Whether a scale gesture is currently active.
   bool get isScaling => _isScaling;
@@ -118,8 +124,11 @@ class FlexboxScaleController extends ChangeNotifier {
   bool get canZoomOut => _currentExtent < maxExtent;
 
   /// The normalized scale factor (0.0 = min extent, 1.0 = max extent).
-  double get normalizedScale =>
-      (_currentExtent - minExtent) / (maxExtent - minExtent);
+  double get normalizedScale {
+    final range = maxExtent - minExtent;
+    if (range <= 0) return 0.0;
+    return (_currentExtent - minExtent) / range;
+  }
 
   /// The snap points for extent values.
   List<double> get snapPoints => List.unmodifiable(_snapPoints);
@@ -127,10 +136,15 @@ class FlexboxScaleController extends ChangeNotifier {
   /// Attaches a [TickerProvider] for animations.
   ///
   /// This must be called before using snap animations. Typically called
-  /// in [State.initState] with `this` as the ticker provider.
+  /// in [State.initState] with `this` as the ticker provider. Because this
+  /// controller manages two animations internally, use
+  /// `TickerProviderStateMixin` (not `SingleTickerProviderStateMixin`).
   void attachTickerProvider(TickerProvider provider) {
     _animationController?.dispose();
-    _animationController = AnimationController(vsync: provider);
+    _animationController = AnimationController.unbounded(
+      vsync: provider,
+      value: _currentExtent,
+    );
     _animationController!.addListener(_onAnimationUpdate);
 
     _fillFactorController?.dispose();
@@ -143,36 +157,61 @@ class FlexboxScaleController extends ChangeNotifier {
 
   void _onFillFactorUpdate() {
     if (_fillFactorAnimation != null) {
-      _fillFactor = _fillFactorAnimation!.value;
-      notifyListeners();
+      final value = _fillFactorAnimation!.value;
+      if (_fillFactor != value) {
+        _fillFactor = value;
+        notifyListeners();
+      }
     }
   }
 
   void _onAnimationUpdate() {
-    if (_animation != null) {
-      _currentExtent = _animation!.value;
-      notifyListeners();
+    final controller = _animationController;
+    if (controller == null) return;
+    _setCurrentExtent(controller.value, syncTickerValue: false);
+  }
+
+  void _setCurrentExtent(
+    double extent, {
+    bool syncBaseExtent = false,
+    bool syncTickerValue = true,
+  }) {
+    final clampedExtent = extent.clamp(minExtent, maxExtent).toDouble();
+    final animationController = _animationController;
+    if (animationController != null &&
+        syncTickerValue &&
+        animationController.value != clampedExtent) {
+      animationController.value = clampedExtent;
     }
+    if (_currentExtent == clampedExtent) {
+      if (syncBaseExtent) {
+        _baseExtent = clampedExtent;
+      }
+      return;
+    }
+    _currentExtent = clampedExtent;
+    if (syncBaseExtent) {
+      _baseExtent = clampedExtent;
+    }
+    _extentListenable.value = clampedExtent;
+    notifyListeners();
   }
 
   /// Sets the current extent directly without animation.
   void setExtent(double extent) {
-    final newExtent = extent.clamp(minExtent, maxExtent);
-    if (_currentExtent != newExtent) {
-      _currentExtent = newExtent;
-      _baseExtent = newExtent;
-      notifyListeners();
-    }
+    final newExtent = extent.clamp(minExtent, maxExtent).toDouble();
+    _setCurrentExtent(newExtent, syncBaseExtent: true);
   }
 
   /// Animates to the specified extent with spring physics.
   void animateToExtent(double targetExtent, {double velocity = 0.0}) {
-    if (_animationController == null) {
+    final controller = _animationController;
+    if (controller == null) {
       setExtent(targetExtent);
       return;
     }
 
-    final clampedTarget = targetExtent.clamp(minExtent, maxExtent);
+    final clampedTarget = targetExtent.clamp(minExtent, maxExtent).toDouble();
 
     // Use softer spring for smoother, more natural animation
     // Lower stiffness = slower approach to target
@@ -189,17 +228,17 @@ class FlexboxScaleController extends ChangeNotifier {
       clampedTarget,
       velocity,
     );
-
-    _animation = _animationController!.drive(
-      Tween<double>(begin: _currentExtent, end: clampedTarget),
-    );
-
-    _animationController!.animateWith(simulation);
+    controller
+      ..stop()
+      ..value = _currentExtent
+      ..animateWith(simulation);
   }
 
   /// Finds the nearest snap point for the given extent.
   double findNearestSnapPoint(double extent) {
-    if (_snapPoints.isEmpty) return extent.clamp(minExtent, maxExtent);
+    if (_snapPoints.isEmpty) {
+      return extent.clamp(minExtent, maxExtent).toDouble();
+    }
 
     double nearest = _snapPoints.first;
     double minDistance = (extent - nearest).abs();
@@ -233,24 +272,26 @@ class FlexboxScaleController extends ChangeNotifier {
     // Pinch out (scale > 1) = zoom in = larger extent = larger items
     // Pinch in (scale < 1) = zoom out = smaller extent = smaller items
     final newExtent = _baseExtent * details.scale;
-    final clampedExtent = newExtent.clamp(minExtent, maxExtent);
-
-    if (_currentExtent != clampedExtent) {
-      _currentExtent = clampedExtent;
-      notifyListeners();
-    }
+    final clampedExtent = newExtent.clamp(minExtent, maxExtent).toDouble();
+    _setCurrentExtent(clampedExtent);
   }
 
   /// Called when a scale gesture ends.
   void onScaleEnd(ScaleEndDetails details) {
     _baseExtent = _currentExtent;
     _isScaling = false;
+    notifyListeners();
 
     // Animate fillFactor from 0 to 1 for smooth transition
     _animateFillFactor();
 
     if (!enableSnap) {
       return;
+    }
+
+    final targetExtent = findNearestSnapPoint(_currentExtent);
+    if (targetExtent != _currentExtent) {
+      animateToExtent(targetExtent);
     }
   }
 
@@ -333,6 +374,7 @@ class FlexboxScaleController extends ChangeNotifier {
   void dispose() {
     _animationController?.dispose();
     _fillFactorController?.dispose();
+    _extentListenable.dispose();
     super.dispose();
   }
 

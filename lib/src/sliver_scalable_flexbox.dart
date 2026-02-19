@@ -73,13 +73,13 @@ class SliverScalableFlexbox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: controller,
-      builder: (context, child) {
+    return ValueListenableBuilder<double>(
+      valueListenable: controller.extentListenable,
+      builder: (context, extent, child) {
         return SliverFlexbox(
           delegate: delegate,
           flexboxDelegate: SliverFlexboxDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: controller.currentExtent,
+            maxCrossAxisExtent: extent,
             mainAxisSpacing: mainAxisSpacing,
             crossAxisSpacing: crossAxisSpacing,
             childAspectRatio: childAspectRatio,
